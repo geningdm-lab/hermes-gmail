@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.env
+.env.*
+*.pem
+# Runtime state of a local run: journal, cooldown, config with real names.
+state/
+*.sqlite
+*.sqlite-journal
+config.local.toml

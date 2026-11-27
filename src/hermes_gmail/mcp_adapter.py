@@ -170,6 +170,23 @@ def build_server(client: GateClient) -> MCPServer:
     ) -> dict[str, Any]:
         return await call("draft_put", to=to, subject=subject, body=body, cc=cc, thread_id=thread_id, draft_id=draft_id)
 
+    @read_tool("Preview sending an existing draft: its recipients and subject. Returns a `preview_id` for send_apply.")
+    async def send_prepare(draft_id: str) -> dict[str, Any]:
+        return await call("send_prepare", draft_id=draft_id)
+
+    @server.tool(
+        description=(
+            "Send the previewed draft after the owner approves it. On `uncertain`, never send again: "
+            "run send_reconcile."
+        )
+    )
+    async def send_apply(preview_id: str, answer: Answer) -> dict[str, Any]:
+        return await approved("send_apply", preview_id, answer)
+
+    @read_tool("Settle a send that ended `uncertain`: sent, not_sent, or still uncertain. Sends nothing.")
+    async def send_reconcile(draft_id: str) -> dict[str, Any]:
+        return await call("send_reconcile", draft_id=draft_id)
+
     return server
 
 

@@ -29,6 +29,9 @@ DOCUMENT = {
 SECRET_MARKERS = ("SECRET-CLIENT-MARKER", "SECRET-REFRESH-MARKER", "PROVIDER-BODY-MARKER", "VAULT-OUTPUT-MARKER")
 
 
+DROP = 0  # a Reply with this status closes the connection without answering
+
+
 @dataclass
 class Reply:
     status: int = 200
@@ -115,6 +118,9 @@ class FakeGoogle:
                     self.command, path, urllib.parse.parse_qs(parts.query), body, self.headers.get("Authorization")
                 )
                 reply = fake._answer(seen)
+                if reply.status == DROP:
+                    self.close_connection = True
+                    return
                 payload = reply.body if isinstance(reply.body, bytes) else json.dumps(reply.body).encode()
                 self.send_response(reply.status)
                 for name, value in reply.headers.items():
@@ -328,6 +334,23 @@ class Mailbox:
                     ]
                 },
             )
+        if path == "drafts/send" and method == "POST":
+            draft_id = body["id"]
+            self.writes.append(("draft_send", draft_id))
+            if draft_id not in self.drafts:
+                return not_found
+            stored = self.drafts.pop(draft_id)
+            sent_id = self._id("s")
+            self.states[sent_id] = {"SENT"}
+            self.threads.setdefault(stored["thread_id"], []).append(
+                {
+                    "id": sent_id,
+                    "threadId": stored["thread_id"],
+                    "labelIds": ["SENT"],
+                    "payload": _payload(stored["raw"]),
+                }
+            )
+            return Reply(200, {"id": sent_id, "threadId": stored["thread_id"], "labelIds": ["SENT"]})
         if path.startswith("drafts/"):
             draft_id = path.split("/", 1)[1]
             if draft_id not in self.drafts:

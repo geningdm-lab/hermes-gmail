@@ -15,6 +15,7 @@ from hermes_gmail.health import Health
 from hermes_gmail.interactive import Interactive
 from hermes_gmail.journal import Journal
 from hermes_gmail.reads import Reads
+from hermes_gmail.send import Sender
 from hermes_gmail.transport import Transport
 from hermes_gmail.vault import OpVault
 
@@ -80,6 +81,14 @@ class Gate:
             parallel=config.budget.in_flight,
             deadline=self.deadline,
             wall_clock=wall_clock,
+        )
+        self.sender = Sender(
+            transport=self.transport,
+            reads=self.reads,
+            interactive=self.interactive,
+            journal=self.journal,
+            health=self.health_counters,
+            deadline=self.deadline,
         )
 
     def journal(self) -> Journal:

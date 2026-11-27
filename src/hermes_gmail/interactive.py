@@ -139,10 +139,10 @@ class Interactive:
             if part
         )
         summary = f"Change labels on {len(targets)} message(s): {changes}."
-        return self._store("modify", caller, payload, summary)
+        return self.store_preview("modify", caller, payload, summary)
 
     def modify_apply(self, preview_id: Any, approval: Any = None, caller: str = "local") -> dict[str, Any]:
-        preview = self._take("modify", preview_id, approval, caller)
+        preview = self.take_preview("modify", preview_id, approval, caller)
         payload = preview.payload
         deadline = self._deadline(WRITE_DEADLINE_SECONDS)
         current = self._states(payload["ids"], deadline)
@@ -219,10 +219,10 @@ class Interactive:
             )
             if part
         )
-        return self._store("filter", caller, {"criteria": clean_criteria, "action": action}, summary + ".")
+        return self.store_preview("filter", caller, {"criteria": clean_criteria, "action": action}, summary + ".")
 
     def filter_apply(self, preview_id: Any, approval: Any = None, caller: str = "local") -> dict[str, Any]:
-        preview = self._take("filter", preview_id, approval, caller)
+        preview = self.take_preview("filter", preview_id, approval, caller)
         criteria, action = preview.payload["criteria"], preview.payload["action"]
         if any(_same_filter(f, criteria, action) for f in self._reads.filters()["filters"]):
             self._journal().move_preview(preview.id, from_status="applying", to_status="stale")
@@ -262,10 +262,10 @@ class Interactive:
         if current is None:
             raise GateError(Category.GMAIL_NOT_FOUND, "Gmail has no such filter")
         summary = f"Delete the filter for {_describe(current['criteria'])}."
-        return self._store("filter_delete", caller, {"filter": current}, summary)
+        return self.store_preview("filter_delete", caller, {"filter": current}, summary)
 
     def filter_delete_apply(self, preview_id: Any, approval: Any = None, caller: str = "local") -> dict[str, Any]:
-        preview = self._take("filter_delete", preview_id, approval, caller)
+        preview = self.take_preview("filter_delete", preview_id, approval, caller)
         expected = preview.payload["filter"]
         current = self._filter(expected["id"])
         if current is None or not _same_filter(current, expected["criteria"], expected["action"]):
@@ -382,7 +382,7 @@ class Interactive:
             "expires_at": found.expires,
         }
 
-    def _store(self, operation: str, caller: str, payload: dict[str, Any], summary: str) -> dict[str, Any]:
+    def store_preview(self, operation: str, caller: str, payload: dict[str, Any], summary: str) -> dict[str, Any]:
         payload = {**payload, "summary": summary}
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         preview = Preview(
@@ -397,7 +397,7 @@ class Interactive:
         self._journal().put_preview(preview)
         return {"preview_id": preview.id, "summary": summary, "expires_at": preview.expires, **_visible(payload)}
 
-    def _take(self, operation: str, preview_id: Any, approval: Any, caller: str) -> Preview:
+    def take_preview(self, operation: str, preview_id: Any, approval: Any, caller: str) -> Preview:
         if approval not in APPROVALS:
             raise bounds.refused("an apply needs the owner's approval")
         found = self._journal().get_preview(_preview_id(preview_id))

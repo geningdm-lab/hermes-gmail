@@ -151,6 +151,11 @@ class Journal:
             return None
         return Preview(row[0], row[1], row[2], row[3], row[4], json.loads(row[5]), row[6])
 
+    def preview_by_hash(self, digest: str) -> Preview | None:
+        with self._lock:
+            row = self._db.execute("SELECT id FROM previews WHERE hash = ? ORDER BY created DESC", (digest,)).fetchone()
+        return self.get_preview(row[0]) if row else None
+
     def move_preview(self, preview_id: str, *, from_status: str, to_status: str) -> bool:
         """Change a preview's status only if it still has `from_status`: one apply wins."""
         with self._lock:

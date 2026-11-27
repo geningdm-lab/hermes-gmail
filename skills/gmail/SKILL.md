@@ -1,6 +1,6 @@
 ---
 name: gmail
-description: Work the owner's Gmail through the hermes-gmail tools (mcp__gmail__*). Use for searching mail, reading messages and threads, changing labels, managing filters and writing drafts. Never read the OAuth document or call the Gmail API directly.
+description: Work the owner's Gmail through the hermes-gmail tools (mcp__gmail__*). Use for searching mail, reading messages and threads, changing labels, managing filters, writing drafts and sending them. Never read the OAuth document or call the Gmail API directly.
 ---
 
 # Gmail through hermes-gmail
@@ -20,7 +20,8 @@ The `gmail` MCP server is the only way to the mailbox. It holds the credential; 
 - Label changes and filters are two steps. `modify_prepare`, `filter_prepare` or `filter_delete_prepare` return a `preview_id` and a `summary`; show the owner the summary, then call the matching `*_apply` with the `preview_id`. The owner is asked to approve the gate's own summary; if they decline, nothing is written and you may ask again only when they say so.
 - An apply stops with `refused` when the messages or the filter changed since the preview, or when the preview expired (15 minutes) or was already used. Prepare again; never work around it.
 - `label_create` returns an existing label of that name instead of creating a second one.
-- `draft_put` with `thread_id` updates the thread's draft and sets the reply headers; it never sends. Sending is not available through these tools.
+- `draft_put` with `thread_id` updates the thread's draft and sets the reply headers; it never sends.
+- To send, write the draft first, then `send_prepare` and `send_apply`; the owner approves the recipients and subject. If `send_apply` ends `uncertain`, never send again: run `send_reconcile`, which answers `sent`, `not_sent` (prepare again if the owner still wants it) or `uncertain` (tell the owner).
 - After `uncertain`, read the current state (labels, filters, the thread's drafts) before trying again.
 
 ## Errors

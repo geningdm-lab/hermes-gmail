@@ -33,7 +33,7 @@ class Adapter(ServiceTestCase):
         tools = {tool.name: tool for tool in anyio.run(check)}
         # `preview` is the adapter's own lookup for the approval question, not a tool.
         self.assertEqual(set(tools), set(self.dispatcher.operations_for(AGENT)) - {"preview"})
-        writes = {"label_create", "modify_apply", "filter_apply", "filter_delete_apply", "draft_put"}
+        writes = {"label_create", "modify_apply", "filter_apply", "filter_delete_apply", "draft_put", "send_apply"}
         for name, tool in tools.items():
             with self.subTest(name):
                 read_only = bool(tool.annotations and tool.annotations.read_only_hint)

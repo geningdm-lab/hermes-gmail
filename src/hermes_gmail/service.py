@@ -60,6 +60,9 @@ def interactive_operations(gate: Gate) -> dict[str, Operation]:
         "filter_delete_prepare": interactive.filter_delete_prepare,
         "filter_delete_apply": interactive.filter_delete_apply,
         "draft_put": interactive.draft_put,
+        "send_prepare": gate.sender.send_prepare,
+        "send_apply": gate.sender.send_apply,
+        "send_reconcile": gate.sender.send_reconcile,
     }
 
 

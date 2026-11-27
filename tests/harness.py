@@ -372,10 +372,16 @@ class Mailbox:
                 },
             )
         if path.startswith("threads/"):
+            # Like Gmail, a thread lists its drafts among its messages, labelled DRAFT.
             thread_id = path.split("/", 1)[1]
-            if thread_id not in self.threads:
+            drafts = [
+                {"id": v["message_id"], "threadId": thread_id, "labelIds": ["DRAFT"], "payload": _payload(v["raw"])}
+                for v in self.drafts.values()
+                if v["thread_id"] == thread_id and v["raw"]
+            ]
+            if thread_id not in self.threads and not drafts:
                 return not_found
-            return Reply(200, {"id": thread_id, "messages": self.threads[thread_id]})
+            return Reply(200, {"id": thread_id, "messages": self.threads.get(thread_id, []) + drafts})
         return not_found
 
 

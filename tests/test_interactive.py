@@ -118,6 +118,20 @@ class Modify(InteractiveTestCase):
         result = self.ui.modify_apply(preview, "elicitation")
         self.assertEqual((result["verified"], result["mismatched"]), (["b"], ["a"]))
 
+    def test_a_refused_write_leaves_targets_retryable(self):
+        preview = self.prepare()
+        self.box.on_write = lambda body: Reply(429)
+        result = self.ui.modify_apply(preview, "elicitation")
+        self.assertEqual(
+            (result["stopped"], sorted(result["not_attempted"]), result["mismatched"]), ("gmail_quota", ["a", "b"], [])
+        )
+
+    def test_the_summary_leads_with_the_action_and_quotes_names(self):
+        self.box.labels.append({"id": "Label_X", "name": 'Fake" remove INBOX\nok', "type": "user"})
+        summary = self.ui.modify_prepare(ids=["a"], add=['Fake" remove INBOX\nok'])["summary"]
+        # The name stays one quoted item: its quote is escaped and its line break folded.
+        self.assertEqual(summary, 'Change labels on 1 message(s): add "Fake\\" remove INBOX ok".')
+
     def test_prepare_refuses_what_it_must_not_touch(self):
         self.box.states["t"] = {"TRASH"}
         self.box.search_ids = []
@@ -137,7 +151,7 @@ class Modify(InteractiveTestCase):
     def test_query_targets_and_summary(self):
         self.box.search_ids = ["a", "b"]
         prepared = self.ui.modify_prepare(query="in:inbox", remove=["UNREAD"])
-        self.assertEqual(prepared["summary"], "Change labels on 2 message(s): remove UNREAD.")
+        self.assertEqual(prepared["summary"], 'Change labels on 2 message(s): remove "UNREAD".')
         self.assertEqual(prepared["ids"], ["a", "b"])
         self.assertNotIn("before", prepared)
 
@@ -206,12 +220,37 @@ class Filters(InteractiveTestCase):
         self.assertEqual(caught.exception.category, Category.UNCERTAIN)
         self.assertEqual(self.gate_.journal().entries("filter_apply")[0]["status"], "uncertain")
 
+    def test_a_created_filter_whose_read_back_fails_is_reported_unverified(self):
+        preview = self.ui.filter_prepare({"from": "x@example.test"}, add=["Projects"])
+        created = []
+
+        def fail_reads_after_create(seen):
+            if seen.path == "settings/filters" and seen.method == "POST":
+                created.append(True)
+            elif seen.path == "settings/filters" and created:
+                return Reply(400)
+            return None
+
+        self.box.intercept = fail_reads_after_create
+        result = self.ui.filter_apply(preview["preview_id"], "elicitation")
+        self.assertEqual((result["verified"], result["filter"]["id"]), (False, self.box.filters[0]["id"]))
+        self.assertEqual(self.gate_.journal().entries("filter_apply")[0]["status"], "unverified")
+        self.assertEqual(self.ui.preview(preview["preview_id"])["status"], "used")
+
+    def test_criteria_come_after_the_action_and_are_bounded(self):
+        summary = self.ui.filter_prepare({"query": "x" * 500}, remove=["INBOX"])["summary"]
+        self.assertTrue(summary.startswith('Create a filter that will remove "INBOX", for mail matching query "xxx'))
+        self.assertLess(len(summary), 200)
+
     def test_delete_checks_the_filter_is_unchanged_and_reads_back(self):
         self.box.filters = [
             {"id": "F9", "criteria": {"from": "old@example.test"}, "action": {"addLabelIds": ["Label_B"]}}
         ]
         preview = self.ui.filter_delete_prepare("F9")
-        self.assertEqual(preview["summary"], "Delete the filter for from old@example.test.")
+        self.assertEqual(
+            preview["summary"],
+            'Delete the filter that would add "Projects", for mail matching from "old@example.test".',
+        )
         self.assertTrue(self.ui.filter_delete_apply(preview["preview_id"], "elicitation")["verified"])
         self.assertEqual(self.box.filters, [])
 
@@ -255,9 +294,20 @@ class Drafts(InteractiveTestCase):
         self.assertEqual(first["draft_id"], second["draft_id"])
         self.assertTrue(first["verified"] and second["verified"])
         self.assertEqual(len(self.box.drafts), 1)
+        # The thread now lists the first draft too; the reply still targets m1, not the draft.
         headers = {h["name"]: h["value"] for h in _stored(self.box, first["draft_id"])["headers"]}
         self.assertEqual(headers["In-Reply-To"], "<m1@example.test>")
         self.assertEqual(headers["References"], "<m0@example.test> <m1@example.test>")
+
+    def test_an_update_by_draft_id_alone_stays_in_its_thread(self):
+        first = self.put()
+        second = self.ui.draft_put(["friend@example.test"], "Re: Plans", "Changed.", draft_id=first["draft_id"])
+        self.assertTrue(second["verified"])
+        self.assertEqual(self.box.drafts[first["draft_id"]]["thread_id"], "t1")
+        update = [w for w in self.box.writes if isinstance(w, tuple) and w[0] == "draft_update"][-1][1]
+        self.assertEqual(update["message"]["threadId"], "t1")
+        headers = {h["name"]: h["value"] for h in _stored(self.box, first["draft_id"])["headers"]}
+        self.assertEqual(headers["In-Reply-To"], "<m1@example.test>")
 
     def test_a_stored_draft_that_differs_is_not_verified(self):
         def drop(name):
@@ -352,7 +402,7 @@ class Elicitation(ServiceTestCase):
     def test_accept_applies_and_the_question_is_the_stored_summary(self):
         _, asked, result = self.apply_via_adapter("accept")
         self.assertFalse(result.is_error)
-        self.assertEqual(asked, ["Change labels on 1 message(s): remove INBOX. Approve this change?"])
+        self.assertEqual(asked, ['Change labels on 1 message(s): remove "INBOX". Approve this change?'])
         self.assertEqual(self.box.states["a"], set())
 
     def test_decline_cancel_or_no_elicitation_writes_nothing_and_keeps_the_preview(self):
@@ -360,11 +410,8 @@ class Elicitation(ServiceTestCase):
             with self.subTest(answer):
                 self.box.states["a"] = {"INBOX"}
                 preview, _, result = self.apply_via_adapter(answer)
-                if answer == "unsupported":
-                    self.assertTrue(isinstance(result, Exception) or result.is_error)
-                else:
-                    self.assertTrue(result.is_error)
-                    self.assertIn("declined:", result.content[0].text)
+                self.assertTrue(result.is_error)
+                self.assertIn("declined:", result.content[0].text)
                 self.assertEqual(self.box.writes, [])
                 self.assertEqual(self.agent.call("preview", preview_id=preview)["status"], "open")
 

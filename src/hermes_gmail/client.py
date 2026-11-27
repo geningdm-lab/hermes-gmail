@@ -8,10 +8,15 @@ from typing import Any
 from hermes_gmail.errors import Category, GateError
 
 RESPONSE_MAX_BYTES = 64 * 1024 * 1024
+# Longer than the service's longest operation deadline (classify_apply on a 2000-entry
+# plan: 120 + 0.5 s per entry), so a slow run ends with its outcome, not `uncertain`.
+DEFAULT_TIMEOUT_SECONDS = 1800.0
 
 
 class GateClient:
-    def __init__(self, socket_path: Path | str, *, caller: str | None = None, timeout: float = 600.0) -> None:
+    def __init__(
+        self, socket_path: Path | str, *, caller: str | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS
+    ) -> None:
         self._path = str(socket_path)
         self._caller = caller
         self._timeout = timeout

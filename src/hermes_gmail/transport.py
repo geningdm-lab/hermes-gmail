@@ -92,8 +92,12 @@ class Transport:
                 raise self._health.fail(Category.UNCERTAIN, "the write may or may not have happened") from None
             raise self._health.fail(Category.GMAIL_FAILED, "Gmail could not be reached; nothing was written") from None
         if 200 <= response.status < 300:
+            parsed = _parse(response)
+            if parsed is None:
+                # Gmail accepted the write; only its answer is unreadable.
+                raise self._health.fail(Category.UNCERTAIN, "Gmail accepted the write but its answer is unreadable")
             self._health.success("write")
-            return self._body(response)
+            return parsed
         if response.status >= 500:
             raise self._health.fail(Category.UNCERTAIN, "Gmail failed mid-write; the write may have happened")
         if _retryable(response) is Category.GMAIL_QUOTA:
@@ -138,15 +142,10 @@ class Transport:
         return ceiling * (0.5 + self._jitter() / 2)
 
     def _body(self, response: Response) -> dict[str, Any]:
-        if not response.body:
-            return {}
-        try:
-            value = json.loads(response.body)
-        except ValueError:
-            raise self._health.fail(Category.GMAIL_FAILED, "Gmail answered with something other than JSON") from None
-        if not isinstance(value, dict):
-            raise self._health.fail(Category.GMAIL_FAILED, "Gmail answered with something other than an object")
-        return value
+        parsed = _parse(response)
+        if parsed is None:
+            raise self._health.fail(Category.GMAIL_FAILED, "Gmail answered with something other than a JSON object")
+        return parsed
 
     def _refusal(self, response: Response) -> GateError:
         if response.status == 404:
@@ -154,6 +153,17 @@ class Transport:
         if response.status == 403 and _reasons(response) & _SCOPE_REASONS:
             return self._health.fail(Category.GMAIL_SCOPE, "the OAuth grant lacks the scope for this call")
         return self._health.fail(Category.GMAIL_FAILED, f"Gmail answered {response.status}")
+
+
+def _parse(response: Response) -> dict[str, Any] | None:
+    """The reply body as a JSON object; an empty body is an empty object."""
+    if not response.body:
+        return {}
+    try:
+        value = json.loads(response.body)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _retryable(response: Response) -> Category | None:

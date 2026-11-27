@@ -1,15 +1,18 @@
 """The composition root: one broker, one transport, one budget per process."""
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 from hermes_gmail.broker import CooldownStore, CredentialBroker, TokenClient
 from hermes_gmail.budget import Budget
+from hermes_gmail.classify import Classifier
 from hermes_gmail.config import Config
 from hermes_gmail.errors import GateError
 from hermes_gmail.exchange import Opener, default_opener
 from hermes_gmail.health import Health
+from hermes_gmail.journal import Journal
 from hermes_gmail.reads import Reads
 from hermes_gmail.transport import Transport
 from hermes_gmail.vault import OpVault
@@ -27,6 +30,9 @@ class Gate:
     ) -> None:
         self.config = config
         self._monotonic = monotonic
+        self._wall = wall_clock
+        self._journal: Journal | None = None
+        self._journal_lock = threading.Lock()
         opener = opener or default_opener()
         self.health_counters = Health(wall_clock)
         self.broker = CredentialBroker(
@@ -56,6 +62,32 @@ class Gate:
             sleep=sleep,
         )
         self.reads = Reads(self.transport, parallel=config.budget.in_flight, deadline=self.deadline)
+        self.classifier = Classifier(
+            transport=self.transport,
+            reads=self.reads,
+            journal=self.journal,
+            health=self.health_counters,
+            exclusive_prefix=config.classify_exclusive_prefix,
+            parallel=config.budget.in_flight,
+            deadline=self.deadline,
+        )
+
+    def journal(self) -> Journal:
+        """Opened on first write, so read-only use never touches the state directory."""
+        with self._journal_lock:
+            if self._journal is None:
+                self._journal = Journal(
+                    self.config.state_dir / "journal.sqlite",
+                    retention_days=self.config.journal_retention_days,
+                    wall_clock=self._wall,
+                )
+            return self._journal
+
+    def close(self) -> None:
+        with self._journal_lock:
+            if self._journal is not None:
+                self._journal.close()
+                self._journal = None
 
     def deadline(self, seconds: float) -> float:
         return self._monotonic() + seconds

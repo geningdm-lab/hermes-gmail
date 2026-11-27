@@ -217,13 +217,56 @@ class GateTestCase(unittest.TestCase):
             ),
             google=GoogleConfig(gmail_base=self.google.base, token_url=f"{self.google.base}/token"),
             budget=BudgetConfig(interval_seconds=0.0, in_flight=3),
+            classify_exclusive_prefix="Area/",
         )
 
     def gate(self, **vault: Any) -> Gate:
-        return Gate(self.config(**vault), wall_clock=self.clock, monotonic=self.clock, sleep=self.clock.sleep)
+        gate = Gate(self.config(**vault), wall_clock=self.clock, monotonic=self.clock, sleep=self.clock.sleep)
+        self.addCleanup(gate.close)
+        return gate
 
     def assert_no_secret(self, *texts: object) -> None:
         for text in texts:
             rendered = text if isinstance(text, str) else json.dumps(text, default=str)
             for marker in SECRET_MARKERS:
                 self.assertNotIn(marker, rendered)
+
+
+class Mailbox:
+    """A stateful Gmail for write tests: labels, message label sets and batchModify.
+
+    `on_write(body)` may return a Reply to answer a batchModify instead of applying it;
+    `after_write(states)` runs after a batch is applied, to simulate a race.
+    """
+
+    def __init__(self, labels: list[dict[str, str]], states: dict[str, set[str]]) -> None:
+        self.labels = labels
+        self.states = states
+        self.writes: list[Any] = []
+        self.on_write: Callable[[Any], Reply | None] = lambda body: None
+        self.after_write: Callable[[dict[str, set[str]]], None] = lambda states: None
+        self.lock = threading.Lock()
+
+    def __call__(self, seen: Seen) -> Reply:
+        with self.lock:
+            if seen.path == "labels" and seen.method == "GET":
+                return Reply(200, {"labels": self.labels})
+            if seen.path == "messages/batchModify" and seen.method == "POST":
+                self.writes.append(seen.body)
+                answer = self.on_write(seen.body)
+                if answer is not None:
+                    return answer
+                for message_id in seen.body["ids"]:
+                    if message_id in self.states:
+                        state = self.states[message_id]
+                        self.states[message_id] = (state | set(seen.body["addLabelIds"])) - set(
+                            seen.body["removeLabelIds"]
+                        )
+                self.after_write(self.states)
+                return Reply(204, b"")
+            if seen.path.startswith("messages/") and seen.method == "GET":
+                message_id = seen.path.split("/", 1)[1]
+                if message_id not in self.states:
+                    return Reply(404, {"error": {"code": 404}})
+                return Reply(200, {"id": message_id, "labelIds": sorted(self.states[message_id])})
+        return Reply(404, {"error": {"code": 404}})

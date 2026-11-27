@@ -51,6 +51,9 @@ class Config:
     vault: VaultConfig
     google: GoogleConfig = field(default_factory=GoogleConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    # The classifier's taxonomy belongs to its owner: the prefix comes from config.
+    classify_exclusive_prefix: str | None = None
+    journal_retention_days: float = 90.0
 
 
 def is_loopback_url(url: str) -> bool:
@@ -68,7 +71,7 @@ def load_config(path: Path) -> Config:
 
 
 def parse_config(raw: dict[str, Any]) -> Config:
-    _only_keys(raw, "", {"account", "state_dir", "vault", "google", "budget"})
+    _only_keys(raw, "", {"account", "state_dir", "vault", "google", "budget", "classify", "journal"})
     account = _string(raw, "account")
     if "@" not in account:
         raise ConfigError("account must be an email address")
@@ -101,12 +104,21 @@ def parse_config(raw: dict[str, Any]) -> Config:
         interval_seconds=_positive(budget_raw, "interval_seconds", "budget.", 0.13, allow_zero=True),
         in_flight=int(_positive(budget_raw, "in_flight", "budget.", 3, integer=True)),
     )
+    classify_raw = _table(raw, "classify", required=False)
+    _only_keys(classify_raw, "classify.", {"exclusive_prefix"})
+    prefix = classify_raw.get("exclusive_prefix")
+    if prefix is not None:
+        prefix = _string(classify_raw, "exclusive_prefix", "classify.")
+    journal_raw = _table(raw, "journal", required=False)
+    _only_keys(journal_raw, "journal.", {"retention_days"})
     return Config(
         account=account,
         state_dir=Path(_string(raw, "state_dir")),
         vault=vault,
         google=GoogleConfig(gmail_base=gmail_base, token_url=token_url),
         budget=budget,
+        classify_exclusive_prefix=prefix,
+        journal_retention_days=_positive(journal_raw, "retention_days", "journal.", 90.0),
     )
 
 

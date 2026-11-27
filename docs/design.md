@@ -125,7 +125,9 @@ A count is what was fetched, never `resultSizeEstimate`. HTML-only bodies become
 
 ### Classify
 
-`classify_apply(plan, rule_version)` is today's `GmailAPI.apply` (`gmail_io.py:111`) with a per-message outcome. A plan entry may only add existing user labels and remove `INBOX`; every target is preflighted with a fresh read; a message carrying `SPAM`, `TRASH`, `SENT` or `DRAFT` refuses the plan; the result must carry exactly one label with the configured exclusive prefix (`Area/` today); `UNREAD` is never changed. Writes go out per label-delta group in batches of at most 1000, and every written message is read back. The result lists verified IDs and mismatched IDs separately, so the consumer can advance its checkpoint for the verified ones and set the rest aside instead of losing the whole run.
+`classify_apply(plan, rule_version)` is today's `GmailAPI.apply` (`gmail_io.py:111`) with a per-message outcome. A plan has at most 2000 entries. A plan entry may only add existing user labels and remove `INBOX`; every target is preflighted with a fresh read; a message carrying `SPAM`, `TRASH`, `SENT` or `DRAFT` refuses the plan; the result must carry exactly one label with the configured exclusive prefix (`Area/` today, from config, since the taxonomy is the classifier's); `UNREAD` is never changed. Writes go out per label-delta group in batches of at most 1000, and every written message is read back. A failed or uncertain write is read back too, and later batches are not sent.
+
+Every planned message ends in exactly one list: `missing` (gone before the preflight), `unchanged` (already as planned), `verified`, `mismatched` (read back different: a race, never rolled back), `unverified` (the read-back failed) or `not_attempted` (after a failed batch); `stopped` names the write failure's category. The consumer advances its checkpoint for `verified`, `unchanged` and `missing`, sets `mismatched` and `unverified` aside like withheld messages, and retries `not_attempted` on the next run.
 
 The standing authority for unattended classification is the classifier's own rule version, recorded in the journal. It does not cover any other change.
 
@@ -196,7 +198,7 @@ One slice per pull request, in order.
 Outside this repository, each approved separately:
 
 - Homelab: systemd unit, user, socket and state directory permissions, config, rollback; install and enable the plugin package for the agent's profile, with no same-name `mcp_servers` entry in `config.yaml`.
-- Lumi: the classifier calls the service; a missing checkpoint fails closed instead of starting from an empty one (today `run_daily.py:20` starts empty, which would replay archiving since the baseline); verified IDs advance the checkpoint and mismatched ones are set aside like withheld ones.
+- Lumi: the classifier calls the service; a missing checkpoint fails closed instead of starting from an empty one (today `run_daily.py:20` starts empty, which would replay archiving since the baseline); the outcome lists drive the checkpoint as described in Classify.
 - Lumi: the proactive reader calls the service; its cursors stay as they are.
 - Lumi: the mailbox and OAuth skills stop reading the OAuth document; the agent uses the adapter's tools, and the private mailbox rules stay in Lumi's skill.
 - Lumi: the watchdog job calls `health()` with a forced refresh instead of reading the vault.

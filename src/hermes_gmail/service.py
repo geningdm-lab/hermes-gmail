@@ -48,6 +48,21 @@ def read_operations(gate: Gate) -> dict[str, Operation]:
     }
 
 
+def interactive_operations(gate: Gate) -> dict[str, Operation]:
+    interactive = gate.interactive
+    return {
+        "preview": interactive.preview,
+        "label_create": interactive.label_create,
+        "modify_prepare": interactive.modify_prepare,
+        "modify_apply": interactive.modify_apply,
+        "filter_prepare": interactive.filter_prepare,
+        "filter_apply": interactive.filter_apply,
+        "filter_delete_prepare": interactive.filter_delete_prepare,
+        "filter_delete_apply": interactive.filter_delete_apply,
+        "draft_put": interactive.draft_put,
+    }
+
+
 class Dispatcher:
     def __init__(self, gate: Gate, operations: dict[str, dict[str, Operation]]) -> None:
         """`operations` maps each role to its operations. An operation that needs the
@@ -179,7 +194,7 @@ def build_dispatcher(gate: Gate) -> Dispatcher:
         {
             "read": read_operations(gate),
             "classify": {"classify_apply": gate.classifier.apply},
-            "interactive": {},
+            "interactive": interactive_operations(gate),
         },
     )
 

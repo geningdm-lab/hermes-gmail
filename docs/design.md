@@ -135,19 +135,21 @@ The standing authority for unattended classification is the classifier's own rul
 
 ### Interactive
 
-Every interactive write is two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and an expiry. The owner approves that preview in the agent's chat (see Agent adapter). `apply(preview_ref)` re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview.
+Label changes on messages and filters are two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and a 15-minute expiry. The owner approves that preview in the agent's chat (see Agent adapter). `apply(preview_id, approval)` takes the preview once (a second apply, even a concurrent one, is `refused`), re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview. A declined approval leaves the preview open; a stale or expired one cannot be applied.
+
+`label_create` and `draft_put` are one step. A label is idempotent by name and authorizes nothing else; a draft is idempotent per thread and changes nothing anyone else sees until it is sent. Hermes' trust prompt is their approval.
 
 | Operation | Notes |
 |---|---|
-| `label_create(name)` | idempotent by name; creating a label authorizes nothing else |
-| `modify_prepare(ids or query, add, remove)` / `modify_apply` | may change `INBOX` and `UNREAD`; owner actions since the preview stop the apply rather than being overwritten |
-| `filter_prepare(criteria, action)` / `filter_apply`, `filter_delete_prepare` / `filter_delete_apply` | at most one user label per filter (Gmail's limit); read-back compares label arrays as sets; needs `gmail.settings.basic` |
-| `draft_put(thread_id, to, cc, subject, body)` | updates the draft already attached to the thread instead of creating a second one; the service builds the MIME with `In-Reply-To`, `References` and `threadId`; read-back decodes the MIME and compares recipients, subject and body |
+| `label_create(name)` | idempotent by name: an existing label is returned, not created again; after an uncertain create the label list decides |
+| `modify_prepare(ids or query, add, remove)` / `modify_apply` | at most 1000 targets; `add` and `remove` are existing user labels or `INBOX`, `UNREAD`, `STARRED`, `IMPORTANT`; spam and trash are never targets; owner actions since the preview stop the apply rather than being overwritten; each written target is `verified`, `mismatched` or `unverified` |
+| `filter_prepare(criteria, add, remove)` / `filter_apply`, `filter_delete_prepare` / `filter_delete_apply` | criteria are Gmail's filter fields; `add` is at most one user label (Gmail's limit) plus `STARRED` or `IMPORTANT`; `remove` is `INBOX`, `UNREAD`, `IMPORTANT` or `SPAM`; no forwarding; an identical filter refuses the preview; read-back compares label arrays as sets; a create whose answer was lost is reconciled by listing filters; needs `gmail.settings.basic` |
+| `draft_put(to, subject, body, cc, thread_id, draft_id)` | plain text; updates the draft already attached to the thread instead of creating a second one (several drafts: name one); the service builds the MIME with `In-Reply-To`, `References` and `threadId` from the thread's latest message; read-back decodes the MIME and compares recipients, subject, threading and body; a lost create is `uncertain`, and the next `draft_put` in that thread finds and updates it |
 | `send_prepare(draft_id)` / `send_apply` | sends an existing draft only; the preview holds recipients, subject and a body hash. The journal records `in_flight` durably before the call. A lost response or timeout leaves `uncertain`, never a second send; `send_reconcile` looks for the message in Sent by its `Message-ID` |
 
 Not offered: delete, trash, spam, sending without a draft, forwarding and other settings, attachment download.
 
-An apply without an accepted elicitation writes nothing. Running as the same user as the agent, the service cannot tell an elicitation the owner answered from one the agent answered itself. See Q1.
+An apply without an accepted elicitation writes nothing. The adapter asks through the MCP SDK's elicitation resolver, which uses a mid-call request on the initialize-handshake protocol and an input-required round trip on protocol 2026-07-28; on the latter the answer rides the client's retry sealed with a per-process key, so a client cannot present an answer that was never given. Running as the same user as the agent, the service still cannot tell an elicitation the owner answered from one the agent answered itself. See Q1.
 
 ## State
 

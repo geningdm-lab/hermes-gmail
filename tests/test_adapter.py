@@ -23,23 +23,21 @@ class Adapter(ServiceTestCase):
     def adapter(self):
         return build_server(GateClient(self.socket_path, caller="agent", timeout=10))
 
-    def test_tools_are_the_agents_operations_and_reads_are_marked_read_only(self):
+    def test_tools_are_the_agents_operations_and_only_reads_are_marked_read_only(self):
         self.start(AGENT)
 
         async def check():
             async with Client(self.adapter()) as client:
                 return (await client.list_tools()).tools
 
-        tools = anyio.run(check)
-        names = {tool.name for tool in tools}
-        self.assertEqual(names, set(self.dispatcher.operations_for(AGENT)) - self.write_operations())
-        for tool in tools:
-            with self.subTest(tool.name):
-                self.assertTrue(tool.annotations and tool.annotations.read_only_hint)
-
-    def write_operations(self):
-        """Operations an adapter tool must offer without a read-only hint (slice 5)."""
-        return set()
+        tools = {tool.name: tool for tool in anyio.run(check)}
+        # `preview` is the adapter's own lookup for the approval question, not a tool.
+        self.assertEqual(set(tools), set(self.dispatcher.operations_for(AGENT)) - {"preview"})
+        writes = {"label_create", "modify_apply", "filter_apply", "filter_delete_apply", "draft_put"}
+        for name, tool in tools.items():
+            with self.subTest(name):
+                read_only = bool(tool.annotations and tool.annotations.read_only_hint)
+                self.assertEqual(read_only, name not in writes)
 
     def test_a_call_goes_through_the_socket_and_errors_keep_their_category(self):
         self.start(AGENT)

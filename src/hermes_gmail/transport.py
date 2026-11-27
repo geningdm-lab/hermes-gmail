@@ -84,7 +84,7 @@ class Transport:
         if method not in {"POST", "PUT", "PATCH", "DELETE"}:
             raise self._health.fail(Category.REFUSED, "not a write method")
         url = self._url(path, None)
-        data = json.dumps(body).encode()
+        data = None if method == "DELETE" else json.dumps(body).encode()
         try:
             response = self._exchange(method, url, data, deadline)
         except ExchangeFailed as failure:

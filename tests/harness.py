@@ -233,40 +233,139 @@ class GateTestCase(unittest.TestCase):
 
 
 class Mailbox:
-    """A stateful Gmail for write tests: labels, message label sets and batchModify.
+    """A stateful Gmail for write tests: labels, message label sets, batchModify, filters,
+    drafts and threads.
 
-    `on_write(body)` may return a Reply to answer a batchModify instead of applying it;
-    `after_write(states)` runs after a batch is applied, to simulate a race.
+    `on_write(body)` may answer a batchModify instead of applying it; `after_write(states)`
+    runs after a batch is applied, to simulate a race; `intercept(seen)` may answer any
+    request before the mailbox does.
     """
 
     def __init__(self, labels: list[dict[str, str]], states: dict[str, set[str]]) -> None:
         self.labels = labels
         self.states = states
         self.writes: list[Any] = []
+        self.filters: list[dict[str, Any]] = []
+        self.drafts: dict[str, dict[str, Any]] = {}  # draft id -> {"message_id", "thread_id", "raw"}
+        self.threads: dict[str, list[dict[str, Any]]] = {}
+        self.search_ids: list[str] = []
         self.on_write: Callable[[Any], Reply | None] = lambda body: None
         self.after_write: Callable[[dict[str, set[str]]], None] = lambda states: None
+        self.intercept: Callable[[Seen], Reply | None] = lambda seen: None
         self.lock = threading.Lock()
+        self._next = 0
+
+    def _id(self, prefix: str) -> str:
+        self._next += 1
+        return f"{prefix}{self._next}"
 
     def __call__(self, seen: Seen) -> Reply:
+        answer = self.intercept(seen)
+        if answer is not None:
+            return answer
         with self.lock:
-            if seen.path == "labels" and seen.method == "GET":
-                return Reply(200, {"labels": self.labels})
-            if seen.path == "messages/batchModify" and seen.method == "POST":
-                self.writes.append(seen.body)
-                answer = self.on_write(seen.body)
-                if answer is not None:
-                    return answer
-                for message_id in seen.body["ids"]:
-                    if message_id in self.states:
-                        state = self.states[message_id]
-                        self.states[message_id] = (state | set(seen.body["addLabelIds"])) - set(
-                            seen.body["removeLabelIds"]
-                        )
-                self.after_write(self.states)
-                return Reply(204, b"")
-            if seen.path.startswith("messages/") and seen.method == "GET":
-                message_id = seen.path.split("/", 1)[1]
-                if message_id not in self.states:
-                    return Reply(404, {"error": {"code": 404}})
-                return Reply(200, {"id": message_id, "labelIds": sorted(self.states[message_id])})
-        return Reply(404, {"error": {"code": 404}})
+            return self._serve(seen)
+
+    def _serve(self, seen: Seen) -> Reply:
+        method, path, body = seen.method, seen.path, seen.body
+        not_found = Reply(404, {"error": {"code": 404}})
+        if path == "labels":
+            if method == "POST":
+                self.writes.append(("labels", body))
+                label = {"id": self._id("Label_"), "name": body["name"], "type": "user"}
+                self.labels.append(label)
+                return Reply(200, label)
+            return Reply(200, {"labels": self.labels})
+        if path == "messages/batchModify" and method == "POST":
+            self.writes.append(body)
+            answer = self.on_write(body)
+            if answer is not None:
+                return answer
+            for message_id in body["ids"]:
+                if message_id in self.states:
+                    state = self.states[message_id]
+                    self.states[message_id] = (state | set(body["addLabelIds"])) - set(body["removeLabelIds"])
+            self.after_write(self.states)
+            return Reply(204, b"")
+        if path == "messages" and method == "GET":
+            return Reply(200, {"messages": [{"id": i} for i in self.search_ids]})
+        if path.startswith("messages/") and method == "GET":
+            message_id = path.split("/", 1)[1]
+            if message_id not in self.states:
+                return not_found
+            return Reply(200, {"id": message_id, "labelIds": sorted(self.states[message_id])})
+        if path == "settings/filters":
+            if method == "POST":
+                self.writes.append(("filter", body))
+                entry = {"id": self._id("F"), "criteria": body["criteria"], "action": body["action"]}
+                self.filters.append(entry)
+                return Reply(200, entry)
+            return Reply(200, {"filter": self.filters} if self.filters else {})
+        if path.startswith("settings/filters/") and method == "DELETE":
+            filter_id = path.rsplit("/", 1)[1]
+            self.writes.append(("filter_delete", filter_id))
+            if not any(f["id"] == filter_id for f in self.filters):
+                return not_found
+            self.filters = [f for f in self.filters if f["id"] != filter_id]
+            return Reply(204, b"")
+        if path == "drafts":
+            if method == "POST":
+                self.writes.append(("draft_create", body))
+                draft_id = self._id("r")
+                thread = body["message"].get("threadId") or self._id("t")
+                self.drafts[draft_id] = {
+                    "message_id": self._id("m"),
+                    "thread_id": thread,
+                    "raw": body["message"]["raw"],
+                }
+                return Reply(200, {"id": draft_id, "message": {"id": self.drafts[draft_id]["message_id"]}})
+            return Reply(
+                200,
+                {
+                    "drafts": [
+                        {"id": d, "message": {"id": v["message_id"], "threadId": v["thread_id"]}}
+                        for d, v in self.drafts.items()
+                    ]
+                },
+            )
+        if path.startswith("drafts/"):
+            draft_id = path.split("/", 1)[1]
+            if draft_id not in self.drafts:
+                return not_found
+            stored = self.drafts[draft_id]
+            if method == "PUT":
+                self.writes.append(("draft_update", body))
+                stored["raw"] = body["message"]["raw"]
+                return Reply(200, {"id": draft_id, "message": {"id": stored["message_id"]}})
+            return Reply(
+                200,
+                {
+                    "id": draft_id,
+                    "message": {
+                        "id": stored["message_id"],
+                        "threadId": stored["thread_id"],
+                        "payload": _payload(stored["raw"]),
+                    },
+                },
+            )
+        if path.startswith("threads/"):
+            thread_id = path.split("/", 1)[1]
+            if thread_id not in self.threads:
+                return not_found
+            return Reply(200, {"id": thread_id, "messages": self.threads[thread_id]})
+        return not_found
+
+
+def _payload(raw: str) -> dict[str, Any]:
+    """Gmail's view of a stored raw message: headers and a text/plain body."""
+    import base64
+    import email
+    from email import policy
+
+    message = email.message_from_bytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)), policy=policy.default)
+    text = message.get_content()
+    return {
+        "mimeType": "text/plain",
+        "headers": [{"name": k, "value": str(v)} for k, v in message.items()],
+        "body": {"data": base64.urlsafe_b64encode(text.encode()).decode()},
+    }

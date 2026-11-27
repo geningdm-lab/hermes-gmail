@@ -12,6 +12,7 @@ from hermes_gmail.config import Config
 from hermes_gmail.errors import GateError
 from hermes_gmail.exchange import Opener, default_opener
 from hermes_gmail.health import Health
+from hermes_gmail.interactive import Interactive
 from hermes_gmail.journal import Journal
 from hermes_gmail.reads import Reads
 from hermes_gmail.transport import Transport
@@ -70,6 +71,15 @@ class Gate:
             exclusive_prefix=config.classify_exclusive_prefix,
             parallel=config.budget.in_flight,
             deadline=self.deadline,
+        )
+        self.interactive = Interactive(
+            transport=self.transport,
+            reads=self.reads,
+            journal=self.journal,
+            health=self.health_counters,
+            parallel=config.budget.in_flight,
+            deadline=self.deadline,
+            wall_clock=wall_clock,
         )
 
     def journal(self) -> Journal:

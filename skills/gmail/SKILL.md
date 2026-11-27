@@ -1,6 +1,6 @@
 ---
 name: gmail
-description: Read the owner's Gmail through the hermes-gmail tools (mcp__gmail__*). Use for searching mail, reading messages and threads, and checking labels, filters and drafts. Never read the OAuth document or call the Gmail API directly.
+description: Work the owner's Gmail through the hermes-gmail tools (mcp__gmail__*). Use for searching mail, reading messages and threads, changing labels, managing filters and writing drafts. Never read the OAuth document or call the Gmail API directly.
 ---
 
 # Gmail through hermes-gmail
@@ -15,13 +15,22 @@ The `gmail` MCP server is the only way to the mailbox. It holds the credential; 
 - Text marked `truncated` or `decode_failed` is incomplete. Say so when it matters.
 - `read_thread` gives the latest messages with `direction` (sent or received) and the reply headers a reply needs.
 
+## Changing the mailbox
+
+- Label changes and filters are two steps. `modify_prepare`, `filter_prepare` or `filter_delete_prepare` return a `preview_id` and a `summary`; show the owner the summary, then call the matching `*_apply` with the `preview_id`. The owner is asked to approve the gate's own summary; if they decline, nothing is written and you may ask again only when they say so.
+- An apply stops with `refused` when the messages or the filter changed since the preview, or when the preview expired (15 minutes) or was already used. Prepare again; never work around it.
+- `label_create` returns an existing label of that name instead of creating a second one.
+- `draft_put` with `thread_id` updates the thread's draft and sets the reply headers; it never sends. Sending is not available through these tools.
+- After `uncertain`, read the current state (labels, filters, the thread's drafts) before trying again.
+
 ## Errors
 
 Each error message names a category after the tool name, for example `Error executing tool search: refused: ...`:
 
 | Category | What to do |
 |---|---|
-| `refused` | the request was outside the gate's bounds; fix it |
+| `refused` | the request was outside the gate's bounds, or the preview is stale; fix it or prepare again |
+| `declined` | the owner did not approve; nothing was written |
 | `gmail_quota` | wait and try later |
 | `gmail_not_found` | the item is gone; for `history`, resync from a search |
 | `vault_unavailable` | 1Password is unavailable or cooling down; tell the owner, do not retry in a loop |

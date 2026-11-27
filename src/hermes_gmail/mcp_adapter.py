@@ -11,17 +11,24 @@ Needs the `mcp` extra: `pip install hermes-gmail[mcp]`.
 import os
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import Annotated, Any
 
 import anyio.to_thread
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Elicit, ElicitationResult, MCPServer, Resolve
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.request_state import RequestStateSecurity
 from mcp_types import ToolAnnotations
+from pydantic import BaseModel
 
 from hermes_gmail.client import GateClient
 from hermes_gmail.errors import GateError
 
 READ_ONLY = ToolAnnotations(read_only_hint=True)
+
+
+class Approval(BaseModel):
+    """No fields: the owner answers yes or no to the preview's summary."""
+
 
 INSTRUCTIONS = (
     "Gmail for the owner's one account, through the hermes-gmail gate. Reads are bounded: "
@@ -32,7 +39,11 @@ INSTRUCTIONS = (
 
 
 def build_server(client: GateClient) -> MCPServer:
-    server = MCPServer(name="hermes-gmail", instructions=INSTRUCTIONS)
+    # The owner's answer may ride the client's retry (protocol 2026-07-28); sealing it with
+    # a process-local key keeps a client from presenting an answer that was never given.
+    server = MCPServer(
+        name="hermes-gmail", instructions=INSTRUCTIONS, request_state_security=RequestStateSecurity.ephemeral()
+    )
 
     async def call(op: str, **args: Any) -> Any:
         try:
@@ -86,6 +97,78 @@ def build_server(client: GateClient) -> MCPServer:
     @read_tool("The gate's error counters, last successes, vault cooldown and budget use.")
     async def health() -> dict[str, Any]:
         return await call("health")
+
+    # Writes carry no read-only hint, so Hermes asks the owner before each call. An apply
+    # also asks on its own, with the summary the gate stored at prepare time.
+
+    async def ask_owner(preview_id: str) -> Elicit[Approval]:
+        """The question shows the summary the gate stored at prepare time, not the agent's words."""
+        preview = await call("preview", preview_id=preview_id)
+        return Elicit(f"{preview['summary']} Approve this change?", Approval)
+
+    Answer = Annotated[ElicitationResult[Approval], Resolve(ask_owner)]
+
+    async def approved(op: str, preview_id: str, answer: Any) -> dict[str, Any]:
+        if answer.action != "accept":
+            raise ToolError("declined: the owner did not approve; nothing was written")
+        return await call(op, preview_id=preview_id, approval="elicitation")
+
+    @server.tool(description="Create a user label, or return the existing one with that name.")
+    async def label_create(name: str) -> dict[str, Any]:
+        return await call("label_create", name=name)
+
+    @read_tool(
+        "Preview a label change on up to 1000 messages, by `ids` or by `query`. `add` and `remove` are "
+        "user label names or INBOX, UNREAD, STARRED, IMPORTANT. Returns a `preview_id` for modify_apply."
+    )
+    async def modify_prepare(
+        ids: list[str] | None = None,
+        query: str | None = None,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return await call("modify_prepare", ids=ids, query=query, add=add, remove=remove)
+
+    @server.tool(description="Apply a label-change preview after the owner approves it. Stops if the messages changed.")
+    async def modify_apply(preview_id: str, answer: Answer) -> dict[str, Any]:
+        return await approved("modify_apply", preview_id, answer)
+
+    @read_tool(
+        "Preview a new Gmail filter. `criteria` uses Gmail's filter fields (from, to, subject, query, ...); "
+        "`add` is at most one user label plus STARRED or IMPORTANT; `remove` is INBOX, UNREAD, IMPORTANT or SPAM."
+    )
+    async def filter_prepare(
+        criteria: dict[str, Any], add: list[str] | None = None, remove: list[str] | None = None
+    ) -> dict[str, Any]:
+        return await call("filter_prepare", criteria=criteria, add=add, remove=remove)
+
+    @server.tool(description="Create the previewed filter after the owner approves it.")
+    async def filter_apply(preview_id: str, answer: Answer) -> dict[str, Any]:
+        return await approved("filter_apply", preview_id, answer)
+
+    @read_tool("Preview deleting a filter by ID.")
+    async def filter_delete_prepare(filter_id: str) -> dict[str, Any]:
+        return await call("filter_delete_prepare", filter_id=filter_id)
+
+    @server.tool(description="Delete the previewed filter after the owner approves it.")
+    async def filter_delete_apply(preview_id: str, answer: Answer) -> dict[str, Any]:
+        return await approved("filter_delete_apply", preview_id, answer)
+
+    @server.tool(
+        description=(
+            "Create or update a plain-text draft. With `thread_id`, the thread's existing draft is updated and the "
+            "reply headers are set. Nothing is sent."
+        )
+    )
+    async def draft_put(
+        to: list[str],
+        subject: str,
+        body: str,
+        cc: list[str] | None = None,
+        thread_id: str | None = None,
+        draft_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await call("draft_put", to=to, subject=subject, body=body, cc=cc, thread_id=thread_id, draft_id=draft_id)
 
     return server
 

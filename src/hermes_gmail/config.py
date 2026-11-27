@@ -3,6 +3,7 @@
 Real names (account, vault item, paths) exist only in the deployment's config file.
 """
 
+import re
 import tomllib
 import urllib.parse
 from dataclasses import dataclass, field
@@ -44,6 +45,19 @@ class BudgetConfig:
     in_flight: int = 3
 
 
+ROLES = ("read", "classify", "interactive")
+_CALLER_NAME = re.compile(r"[a-z0-9_-]{1,32}")
+
+
+@dataclass(frozen=True)
+class CallerConfig:
+    """A caller is a peer user plus a name; the name only narrows what that user may do."""
+
+    name: str
+    uid: int
+    roles: frozenset[str]
+
+
 @dataclass(frozen=True)
 class Config:
     account: str
@@ -54,6 +68,9 @@ class Config:
     # The classifier's taxonomy belongs to its owner: the prefix comes from config.
     classify_exclusive_prefix: str | None = None
     journal_retention_days: float = 90.0
+    socket: Path | None = None
+    socket_mode: int = 0o600
+    callers: tuple[CallerConfig, ...] = ()
 
 
 def is_loopback_url(url: str) -> bool:
@@ -71,7 +88,22 @@ def load_config(path: Path) -> Config:
 
 
 def parse_config(raw: dict[str, Any]) -> Config:
-    _only_keys(raw, "", {"account", "state_dir", "vault", "google", "budget", "classify", "journal"})
+    _only_keys(
+        raw,
+        "",
+        {
+            "account",
+            "state_dir",
+            "vault",
+            "google",
+            "budget",
+            "classify",
+            "journal",
+            "socket",
+            "socket_mode",
+            "callers",
+        },
+    )
     account = _string(raw, "account")
     if "@" not in account:
         raise ConfigError("account must be an email address")
@@ -119,7 +151,39 @@ def parse_config(raw: dict[str, Any]) -> Config:
         budget=budget,
         classify_exclusive_prefix=prefix,
         journal_retention_days=_positive(journal_raw, "retention_days", "journal.", 90.0),
+        socket=Path(_string(raw, "socket")) if "socket" in raw else None,
+        socket_mode=_socket_mode(raw.get("socket_mode", 0o600)),
+        callers=_callers(raw.get("callers", [])),
     )
+
+
+def _socket_mode(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value & ~0o770 or not value & 0o600:
+        raise ConfigError("socket_mode must give the owner read and write and nothing to others")
+    return value
+
+
+def _callers(raw: Any) -> tuple[CallerConfig, ...]:
+    if not isinstance(raw, list):
+        raise ConfigError("callers must be an array of tables")
+    callers = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ConfigError("each [[callers]] entry must be a table")
+        _only_keys(entry, "callers.", {"name", "uid", "roles"})
+        name = _string(entry, "name", "callers.")
+        if not _CALLER_NAME.fullmatch(name):
+            raise ConfigError("callers.name must be 1-32 characters of a-z, 0-9, _ and -")
+        uid = entry.get("uid")
+        if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
+            raise ConfigError("callers.uid must be a user ID")
+        roles = entry.get("roles")
+        if not isinstance(roles, list) or not roles or not set(roles) <= set(ROLES):
+            raise ConfigError(f"callers.roles must be a non-empty list of {', '.join(ROLES)}")
+        callers.append(CallerConfig(name=name, uid=uid, roles=frozenset(roles)))
+    if len({c.name for c in callers}) != len(callers):
+        raise ConfigError("callers names must be unique")
+    return tuple(callers)
 
 
 def _only_keys(table: dict[str, Any], prefix: str, allowed: set[str]) -> None:

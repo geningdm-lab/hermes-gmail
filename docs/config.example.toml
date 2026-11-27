@@ -1,0 +1,41 @@
+# hermes-gmail service config. Every value here is an example; the real file lives in
+# deployment config, outside this repository.
+
+account = "owner@example.test"           # the one Gmail account this gate serves
+state_dir = "/var/lib/hermes-gmail"      # journal and vault cooldown; 0700, owned by the service
+socket = "/run/hermes-gmail/gate.sock"
+socket_mode = 0o600                      # owner rw; 0o660 once callers run as their own users
+
+[vault]
+item = "OAuth document item name"        # `op document get <item> --vault <vault>`
+vault = "Vault name"
+op = "op"                                # or an absolute path
+timeout_seconds = 30
+attempts = 3                             # bounded retries before the cooldown
+backoff_seconds = 1
+cooldown_seconds = 900                   # Q6
+
+[budget]
+interval_seconds = 0.13                  # D5: request starts at least this far apart
+in_flight = 3
+
+[classify]
+exclusive_prefix = "Area/"               # the result must carry exactly one label with this prefix
+
+[journal]
+retention_days = 90                      # Q4
+
+[[callers]]
+name = "classifier"
+uid = 1000
+roles = ["read", "classify"]
+
+[[callers]]
+name = "reader"
+uid = 1000
+roles = ["read"]
+
+[[callers]]
+name = "agent"
+uid = 1000
+roles = ["read", "interactive"]

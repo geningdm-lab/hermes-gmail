@@ -59,6 +59,8 @@ The service is not a Hermes plugin (D9). A plugin runs inside the Hermes process
 
 One account is configured. A request for any other account is refused.
 
+The socket speaks one JSON object per line each way: `{"op", "args", "caller", "account"}` in, `{"ok": true, "result"}` or `{"ok": false, "error": {"category", "detail"}}` out. Config lists the callers as `[[callers]]` entries of name, user ID and roles (`read`, `classify`, `interactive`). The peer's user ID comes from the kernel. While several callers run as one user (D4), a request names which of that user's entries it is; the name can only pick among them, never add to them, so this separation is operational, not a security boundary, until the callers get their own users. `docs/config.example.toml` shows every key.
+
 ### Credential broker
 
 - Reads the OAuth document with `op document get` into memory only. Item and vault names come from config. No token reaches disk, stdout, logs or a response.

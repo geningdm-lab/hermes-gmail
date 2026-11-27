@@ -18,9 +18,15 @@ class Health:
 
     def fail(self, category: Category, detail: str) -> GateError:
         """Count the category and return the error for the caller to raise."""
+        return self.record(GateError(category, detail))
+
+    def record(self, error: GateError) -> GateError:
+        """Count an error once, however many layers it passes."""
         with self._lock:
-            self._errors[category] += 1
-        return GateError(category, detail)
+            if not error.counted:
+                self._errors[error.category] += 1
+                error.counted = True
+        return error
 
     def count(self, event: str) -> None:
         with self._lock:

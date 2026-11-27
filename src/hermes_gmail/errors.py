@@ -28,6 +28,7 @@ class GateError(Exception):
         super().__init__(f"{category}: {detail}")
         self.category = category
         self.detail = detail
+        self.counted = False  # set once health() has counted it
 
     def to_dict(self) -> dict[str, str]:
         return {"category": str(self.category), "detail": self.detail}

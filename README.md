@@ -6,13 +6,19 @@ Cron jobs use the socket client. The agent reaches the service through a local M
 
 The design, its decisions and its acceptance rows are in [docs/design.md](docs/design.md). Work proceeds one slice of the design per pull request.
 
+## Running
+
+- `hermes-gmail serve --config <file>` runs the service; [docs/config.example.toml](docs/config.example.toml) lists every key. Deployment (unit, user, socket directory) belongs to the host's infrastructure repository.
+- Cron consumers use `hermes_gmail.client.GateClient`, or the read-only CLI: `hermes-gmail search --socket <path> --query ...`.
+- The agent gets the gate as a Hermes plugin package: this repository's `plugin.json`, `mcp.json` and `skills/`. Install the package with `hermes-gmail[mcp]` on the agent's `PATH`, and set `HERMES_GMAIL_SOCKET` and `HERMES_GMAIL_CALLER` in the agent's profile.
+
 ## Development
 
 Tools come from mise (`mise.toml`): Python 3.14, uv, ruff. The service itself uses the standard library only.
 
 ```bash
 mise install
-uv sync
+uv sync --all-extras
 uv run python -m unittest discover -s tests -t .
 ruff check . && ruff format --check .
 ```

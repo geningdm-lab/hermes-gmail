@@ -1,6 +1,7 @@
 import unittest
+from pathlib import Path
 
-from hermes_gmail.config import ConfigError, parse_config
+from hermes_gmail.config import ConfigError, load_config, parse_config
 
 MINIMAL = {
     "account": "owner@example.test",
@@ -30,12 +31,19 @@ class ConfigTests(unittest.TestCase):
             {**MINIMAL, "google": {"gmail_base": "http://127.0.0.1:8080", "token_url": "http://localhost:1/t"}}
         )
 
+    def test_the_example_config_is_valid(self):
+        config = load_config(Path(__file__).resolve().parent.parent / "docs" / "config.example.toml")
+        self.assertEqual({c.name for c in config.callers}, {"classifier", "reader", "agent"})
+
     def test_unknown_keys_and_bad_values_are_refused(self):
         for raw in (
             {**MINIMAL, "acount": "typo"},
             {**MINIMAL, "vault": {**MINIMAL["vault"], "attempts": 0}},
             {**MINIMAL, "vault": {**MINIMAL["vault"], "attempts": True}},
             {**MINIMAL, "account": "not-an-address"},
+            {**MINIMAL, "socket_mode": 0o666},
+            {**MINIMAL, "callers": [{"name": "a", "uid": 1, "roles": ["admin"]}]},
+            {**MINIMAL, "callers": [{"name": "a", "uid": 1, "roles": ["read"]}] * 2},
         ):
             with self.subTest(raw), self.assertRaises(ConfigError):
                 parse_config(raw)

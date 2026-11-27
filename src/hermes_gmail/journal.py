@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS operations (
     preview_hash TEXT,
     approval TEXT,
     gmail_ids TEXT NOT NULL DEFAULT '[]',
-    counts TEXT NOT NULL DEFAULT '{}'
+    counts TEXT NOT NULL DEFAULT '{}',
+    fingerprint TEXT
 );
 """
 
@@ -54,12 +55,14 @@ class Journal:
         approval: str | None = None,
         gmail_ids: Iterable[str] = (),
         counts: dict[str, int] | None = None,
+        fingerprint: dict[str, Any] | None = None,
     ) -> int:
+        """`fingerprint` holds what a later reconcile compares: hashes and Gmail IDs only."""
         with self._lock:
             cursor = self._db.execute(
                 "INSERT INTO operations"
-                " (at, caller, operation, status, rule_version, preview_hash, approval, gmail_ids, counts)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (at, caller, operation, status, rule_version, preview_hash, approval, gmail_ids, counts, fingerprint)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._wall(),
                     caller,
@@ -70,6 +73,7 @@ class Journal:
                     approval,
                     json.dumps(list(gmail_ids)),
                     json.dumps(counts or {}),
+                    None if fingerprint is None else json.dumps(fingerprint),
                 ),
             )
             return int(cursor.lastrowid or 0)
@@ -86,7 +90,8 @@ class Journal:
 
     def entries(self, operation: str | None = None) -> list[dict[str, Any]]:
         query = (
-            "SELECT id, at, caller, operation, status, rule_version, preview_hash, approval, gmail_ids, counts"
+            "SELECT id, at, caller, operation, status, rule_version, preview_hash, approval, gmail_ids, counts,"
+            " fingerprint"
             " FROM operations"
         )
         args: tuple[str, ...] = ()
@@ -97,7 +102,12 @@ class Journal:
             rows = self._db.execute(query + " ORDER BY id", args).fetchall()
         keys = ("id", "at", "caller", "operation", "status", "rule_version", "preview_hash", "approval")
         return [
-            {**dict(zip(keys, row[:8], strict=True)), "gmail_ids": json.loads(row[8]), "counts": json.loads(row[9])}
+            {
+                **dict(zip(keys, row[:8], strict=True)),
+                "gmail_ids": json.loads(row[8]),
+                "counts": json.loads(row[9]),
+                "fingerprint": None if row[10] is None else json.loads(row[10]),
+            }
             for row in rows
         ]
 

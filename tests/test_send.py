@@ -42,7 +42,7 @@ class Send(InteractiveTestCase):
 
     def test_an_approved_send_happens_once_and_is_read_back(self):
         preview = self.prepare()
-        self.assertEqual(preview["summary"], 'Send the draft "Re: Plans": to friend@example.test.')
+        self.assertEqual(preview["summary"], 'Send this draft: to "friend@example.test"; subject "Re: Plans".')
         result = self.apply(preview)
         self.assertEqual((result["status"], result["verified"]), ("sent", True))
         self.assertNotIn(self.draft, self.box.drafts)
@@ -97,19 +97,18 @@ class Send(InteractiveTestCase):
         self.assertEqual(self.status(), ["not_sent", "sent"])
 
     def test_a_restart_with_a_send_in_flight_refuses_until_reconciled(self):
+        from unittest import mock
+
+        from hermes_gmail.journal import Journal
+
+        class Crash(Exception):
+            pass
+
         preview = self.prepare()
-        # The process recorded the send and died before Gmail's answer arrived; Gmail sent it.
-        stored = self.gate_.journal().get_preview(preview["preview_id"])
-        self.gate_.journal().record(
-            caller="local",
-            operation="send_apply",
-            status="in_flight",
-            preview_hash=stored.hash,
-            approval="elicitation",
-            gmail_ids=[self.draft, "t1"],
-        )
-        with self.box.lock:
-            self.box._serve(type("S", (), {"method": "POST", "path": "drafts/send", "body": {"id": self.draft}})())
+        # Gmail sends; the process dies before it can record the answer.
+        with mock.patch.object(Journal, "update", side_effect=Crash), self.assertRaises(Crash):
+            self.apply(preview)
+        self.assertEqual(self.status(), ["in_flight"])
         self.gate_.close()
         restarted = Gate(self.config(), wall_clock=self.clock, monotonic=self.clock, sleep=self.clock.sleep)
         self.addCleanup(restarted.close)
@@ -118,6 +117,69 @@ class Send(InteractiveTestCase):
         self.assertEqual(caught.exception.category, Category.REFUSED)
         self.assertEqual(restarted.sender.send_reconcile(self.draft)["status"], "sent")
         self.assertEqual(len(self.sends()), 1)
+
+    def test_two_concurrent_applies_of_one_draft_send_once(self):
+        import contextlib
+        import threading
+
+        previews = [self.prepare(), self.prepare()]
+        barrier = threading.Barrier(2, timeout=1)
+
+        def hold_draft_reads(seen):
+            # Both applies read the draft at the same moment unless the send lock orders them.
+            if seen.path == f"drafts/{self.draft}" and seen.method == "GET":
+                with contextlib.suppress(threading.BrokenBarrierError):
+                    barrier.wait()
+            return None
+
+        self.box.intercept = hold_draft_reads
+        outcomes = []
+
+        def apply(preview):
+            try:
+                outcomes.append(self.apply(preview)["status"])
+            except GateError as error:
+                outcomes.append(error.category)
+
+        threads = [threading.Thread(target=apply, args=(p,)) for p in previews]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(sorted(map(str, outcomes)), ["refused", "sent"])
+
+    def test_reconcile_and_draft_put_wait_for_a_running_send(self):
+        import threading
+
+        release, entered = threading.Event(), threading.Event()
+
+        def slow_send(seen):
+            if seen.path == "drafts/send":
+                entered.set()
+                release.wait(5)
+            return None
+
+        self.box.intercept = slow_send
+        sender = threading.Thread(target=self.apply, args=(self.prepare(),))
+        sender.start()
+        self.assertTrue(entered.wait(5))
+        for name, call in (
+            ("reconcile", lambda: self.gate_.sender.send_reconcile(self.draft)),
+            ("draft_put", lambda: self.ui.draft_put(["x@example.test"], "Re: Plans", "Other.", draft_id=self.draft)),
+        ):
+            with self.subTest(name), self.assertRaises(GateError) as caught:
+                call()
+            self.assertEqual(caught.exception.category, Category.REFUSED)
+        release.set()
+        sender.join()
+        self.assertEqual((len(self.sends()), self.status()), (1, ["sent"]))
+
+    def test_a_failed_read_back_after_the_send_still_reports_sent(self):
+        self.box.intercept = lambda seen: Reply(400) if seen.path.startswith("messages/s") else None
+        result = self.apply(self.prepare())
+        self.assertEqual((result["status"], result["verified"]), ("sent", False))
+        self.assertEqual(self.status(), ["sent"])
 
     def test_a_draft_changed_since_the_preview_is_not_sent(self):
         preview = self.prepare()
@@ -141,6 +203,41 @@ class Send(InteractiveTestCase):
         self.box.drafts.pop(self.draft)  # the owner deleted the draft by hand
         self.assertEqual(self.gate_.sender.send_reconcile(self.draft), {"status": "uncertain"})
         self.assertEqual(self.status(), ["uncertain"])
+
+    def test_a_draft_with_cc_reconciles_as_sent(self):
+        self.ui.draft_put(
+            ["friend@example.test"], "Re: Plans", "See you at noon.", cc=["boss@example.test"], thread_id="t1"
+        )
+
+        def sent_then_lost(seen):
+            if seen.path == "drafts/send":
+                with self.box.lock:
+                    self.box._serve(seen)
+                return Reply(503)
+            return None
+
+        self.box.intercept = sent_then_lost
+        preview = self.prepare()
+        self.assertIn('cc "boss@example.test"', preview["summary"])
+        with self.assertRaises(GateError):
+            self.apply(preview)
+        self.box.intercept = lambda seen: None
+        self.assertEqual(self.gate_.sender.send_reconcile(self.draft)["status"], "sent")
+
+    def test_a_sent_message_to_other_recipients_is_not_this_send(self):
+        self.box.intercept = lambda seen: Reply(503) if seen.path == "drafts/send" else None
+        with self.assertRaises(GateError):
+            self.apply(self.prepare())
+        self.box.intercept = lambda seen: None
+        # The owner deleted the draft and sent something similar by hand, with a Cc added.
+        from hermes_gmail.compose import Draft
+
+        other = Draft.parse(["friend@example.test"], ["boss@example.test"], "Re: Plans", "See you at noon.")
+        self.box.drafts.pop(self.draft)
+        self.box.threads["t1"].append(
+            {"id": "s9", "threadId": "t1", "labelIds": ["SENT"], "payload": _payload(other.raw())}
+        )
+        self.assertEqual(self.gate_.sender.send_reconcile(self.draft), {"status": "uncertain"})
 
     def test_reconcile_with_nothing_open_is_refused(self):
         with self.assertRaises(GateError) as caught:

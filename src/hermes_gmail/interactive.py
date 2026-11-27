@@ -105,6 +105,8 @@ class Interactive:
         self._deadline = deadline
         self._wall = wall_clock
         self.previews = PreviewStore()
+        # Set by the sender: refuses a draft whose send is running, in flight or uncertain.
+        self.draft_guard: Callable[[str], None] | None = None
 
     # Labels
 
@@ -395,6 +397,8 @@ class Interactive:
             if replied is not None:
                 headers = {h["name"].lower(): h["value"] for h in replied["headers"]}
                 draft = draft.replying_to(headers.get("message-id"), headers.get("references"))
+        if did is not None and self.draft_guard is not None:
+            self.draft_guard(did)
         message: dict[str, Any] = {"raw": draft.raw()}
         if tid is not None:
             message["threadId"] = tid

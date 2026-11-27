@@ -10,6 +10,7 @@ from hermes_gmail.config import Config
 from hermes_gmail.errors import GateError
 from hermes_gmail.exchange import Opener, default_opener
 from hermes_gmail.health import Health
+from hermes_gmail.reads import Reads
 from hermes_gmail.transport import Transport
 from hermes_gmail.vault import OpVault
 
@@ -54,6 +55,7 @@ class Gate:
             monotonic=monotonic,
             sleep=sleep,
         )
+        self.reads = Reads(self.transport, parallel=config.budget.in_flight, deadline=self.deadline)
 
     def deadline(self, seconds: float) -> float:
         return self._monotonic() + seconds

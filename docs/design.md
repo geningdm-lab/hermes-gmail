@@ -115,11 +115,11 @@ Each caller (peer user, plus a per-caller config entry) gets a fixed set: the cl
 | Operation | Returns | Bounds |
 |---|---|---|
 | `profile()` | account address, current `historyId` | |
-| `search(query, page_bound)` | IDs, `complete`, `next_page_token` when cut | query at most 8 KiB, at most 100 pages |
-| `read_messages(ids, format, cap)` | per message: headers, labels, and for `full` the plain text with `truncated`/`decode_failed` flags | at most 100 IDs, ID at most 512 bytes |
-| `read_thread(thread_id, bound)` | messages with direction (sent/received) and reply headers | at most 100 messages |
-| `history(start_history_id, page_bound)` | added message IDs and label changes, new `historyId` | at most 100 pages |
-| `labels()`, `filters()`, `drafts(thread_id)` | current provider state | |
+| `search(query, page_bound, page_token)` | IDs, exact `fetched` count, `complete`, `next_page_token` when cut | query at most 8 KiB, at most 100 pages; a repeated page token fails |
+| `read_messages(ids, format, headers, cap)` | per message: labels, and for `metadata`/`full` headers and snippet, for `full` the plain text with `truncated`/`decode_failed` flags; every ID ends in `messages` or in `failed` with its category | at most 100 distinct IDs, ID at most 512 bytes of Gmail's alphabet; `format` is `minimal`, `metadata` or `full`; `cap` is the text length per message, at most 200 000 characters |
+| `read_thread(thread_id, bound, cap)` | the latest `bound` messages, oldest first, with direction (sent/received), reply headers and text; `complete` and `total` | at most 100 messages |
+| `history(start_history_id, page_bound, page_token)` | added and deleted message IDs, label changes, the mailbox's `history_id`; a cursor advances to it only when `complete`; `gmail_not_found` means the start is too old and the consumer resyncs | at most 100 pages |
+| `labels()`, `filters()`, `drafts(thread_id, page_bound)` | current provider state | at most 100 pages of drafts |
 
 A count is what was fetched, never `resultSizeEstimate`. HTML-only bodies become plain text without fetching anything remote.
 

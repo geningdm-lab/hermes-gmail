@@ -91,7 +91,10 @@ class Reads:
         return {"messages": messages, "failed": failed, "fetched": len(messages)}
 
     def read_thread(self, thread_id: Any, bound: Any = 20, cap: Any = TEXT_CAP_DEFAULT) -> dict[str, Any]:
-        """The thread's latest `bound` messages, oldest first, with direction and reply headers."""
+        """The thread's latest `bound` messages, oldest first, with direction and reply headers.
+
+        Gmail lists a thread's drafts among its messages; their direction is `draft`, so a
+        reply is never addressed to an unsent draft."""
         tid = bounds.gmail_id(thread_id, "thread_id")
         limit = bounds.count(bound, "bound", bounds.THREAD_BOUND_MAX)
         text_cap = bounds.count(cap, "cap", TEXT_CAP_MAX)
@@ -104,7 +107,7 @@ class Reads:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 raise _malformed("threads.get")
             view = message_view(item, item["id"], "full", text_cap)
-            view["direction"] = "sent" if "SENT" in view["label_ids"] else "received"
+            view["direction"] = _direction(view["label_ids"])
             view["headers"] = [h for h in view["headers"] if h["name"].lower() in _REPLY_HEADER_KEYS]
             messages.append(view)
         return {"thread_id": tid, "messages": messages, "complete": len(raw) <= limit, "total": len(raw)}
@@ -232,6 +235,12 @@ def message_view(reply: dict[str, Any], expected_id: str, fmt: str, cap: int) ->
     if fmt == "full":
         view.update(extract_text(payload, cap).to_dict())
     return view
+
+
+def _direction(label_ids: list[str]) -> str:
+    if "DRAFT" in label_ids:
+        return "draft"
+    return "sent" if "SENT" in label_ids else "received"
 
 
 def _header_names(value: Any) -> list[str]:

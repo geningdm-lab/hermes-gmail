@@ -109,6 +109,8 @@ class Classifier:
                     outcome["unverified"].append(message_id)
                 elif state == desired[message_id] and ("UNREAD" in state) == ("UNREAD" in before[message_id]):
                     outcome["verified"].append(message_id)
+                elif stopped is not None and state == before[message_id]:
+                    outcome["not_attempted"].append(message_id)  # the failed write left it as it was
                 else:
                     outcome["mismatched"].append(message_id)  # a race; never rolled back
             if stopped is not None:

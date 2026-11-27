@@ -161,3 +161,11 @@ class EntryPoints(GateTestCase):
         self.assertFalse(socket_path.exists())
         self.assert_no_secret(process.stderr.read().decode(), output.stdout, output.stderr)
         process.stderr.close()
+
+
+class ClientTimeout(unittest.TestCase):
+    def test_the_default_outlasts_the_longest_operation_deadline(self):
+        from hermes_gmail.classify import PLAN_MAX
+        from hermes_gmail.client import DEFAULT_TIMEOUT_SECONDS
+
+        self.assertGreater(DEFAULT_TIMEOUT_SECONDS, 120 + 0.5 * PLAN_MAX)

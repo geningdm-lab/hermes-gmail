@@ -84,11 +84,17 @@ class Classify(GateTestCase):
         box = self.mailbox({"a": {"INBOX"}, "b": {"INBOX"}})
         box.on_write = lambda body: Reply(503)
         result = self.gate().classifier.apply([archive("a"), archive("b", "Area/Test", "Action/Reply")], "rules-7")
-        # Two label deltas, so two batches. Gmail failed the first and changed nothing:
-        # read back, it is mismatched, and the second batch is never sent.
+        # Two label deltas, so two batches. Gmail failed the first and changed nothing: read
+        # back unchanged, it is retried next run like the batch that was never sent.
         self.assertEqual(result["stopped"], "uncertain")
         self.assertEqual(len(box.writes), 1)
-        self.assertEqual((result["mismatched"], result["not_attempted"], result["verified"]), (["a"], ["b"], []))
+        self.assertEqual((result["mismatched"], result["not_attempted"], result["verified"]), ([], ["a", "b"], []))
+
+    def test_a_refused_batch_that_changed_nothing_is_retryable_not_a_race(self):
+        box = self.mailbox({"a": {"INBOX"}})
+        box.on_write = lambda body: Reply(429)
+        result = self.gate().classifier.apply([archive("a")], "rules-7")
+        self.assertEqual((result["stopped"], result["not_attempted"], result["mismatched"]), ("gmail_quota", ["a"], []))
 
     def test_noop_missing_and_duplicate(self):
         box = self.mailbox({"a": {"A", "UNREAD"}})

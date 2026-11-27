@@ -125,14 +125,18 @@ class ReadMessages(GateTestCase):
 
 class OtherReads(GateTestCase):
     def test_thread_keeps_the_latest_messages_with_direction_and_reply_headers(self):
-        messages = [message(f"m{i}", labels=("SENT",) if i == 2 else ("INBOX",)) for i in range(1, 4)]
+        labels = {2: ("SENT",), 4: ("DRAFT",)}
+        messages = [message(f"m{i}", labels=labels.get(i, ("INBOX",))) for i in range(1, 5)]
         for m in messages:
             m["payload"]["headers"].append({"name": "Received", "value": "hop"})
             m["payload"]["headers"].append({"name": "Message-ID", "value": f"<{m['id']}@example.test>"})
         self.google.gmail = router({"threads/t1": Reply(200, {"id": "t1", "messages": messages})})
-        result = self.gate().reads.read_thread("t1", 2)
-        self.assertEqual([(m["id"], m["direction"]) for m in result["messages"]], [("m2", "sent"), ("m3", "received")])
-        self.assertEqual((result["complete"], result["total"]), (False, 3))
+        result = self.gate().reads.read_thread("t1", 3)
+        self.assertEqual(
+            [(m["id"], m["direction"]) for m in result["messages"]],
+            [("m2", "sent"), ("m3", "received"), ("m4", "draft")],
+        )
+        self.assertEqual((result["complete"], result["total"]), (False, 4))
         self.assertEqual([h["name"] for h in result["messages"][0]["headers"]], ["Subject", "Message-ID"])
 
     def test_history_aggregates_changes_and_reports_coverage(self):

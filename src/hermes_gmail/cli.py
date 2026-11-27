@@ -100,8 +100,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"hermes-gmail: {error}", file=sys.stderr)
             return 2
     if args.command == "mcp":
-        from hermes_gmail.mcp_adapter import run
-
+        try:
+            from hermes_gmail.mcp_adapter import run
+        except ModuleNotFoundError:
+            print("hermes-gmail mcp needs the mcp extra: install hermes-gmail[mcp]", file=sys.stderr)
+            return 2
         return run(args.socket, args.caller)
     if not args.socket:
         print(

@@ -1,8 +1,8 @@
-"""The write journal: what was changed, by whom and under which authority, plus previews.
+"""The write journal: what was changed, by whom and under which authority.
 
 It records operations, callers, rule versions, preview hashes, approvals, statuses, Gmail
-IDs and counts. It never records bodies, subjects, snippets, codes or tokens. A preview
-holds what an apply will do (targets, label names, filter criteria), not mail content.
+IDs and counts. It never records bodies, subjects, addresses, snippets, codes or tokens;
+previews, which hold some of those, stay in the service's memory.
 """
 
 import json
@@ -11,7 +11,6 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,28 +27,7 @@ CREATE TABLE IF NOT EXISTS operations (
     gmail_ids TEXT NOT NULL DEFAULT '[]',
     counts TEXT NOT NULL DEFAULT '{}'
 );
-CREATE TABLE IF NOT EXISTS previews (
-    id TEXT PRIMARY KEY,
-    operation TEXT NOT NULL,
-    caller TEXT NOT NULL,
-    created REAL NOT NULL,
-    expires REAL NOT NULL,
-    hash TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL
-);
 """
-
-
-@dataclass(frozen=True)
-class Preview:
-    id: str
-    operation: str
-    caller: str
-    expires: float
-    hash: str
-    payload: dict[str, Any]
-    status: str
 
 
 class Journal:
@@ -64,7 +42,6 @@ class Journal:
         self._db.execute("PRAGMA synchronous = FULL")
         horizon = self._wall() - retention_days * 86400
         self._db.execute("DELETE FROM operations WHERE at < ?", (horizon,))
-        self._db.execute("DELETE FROM previews WHERE expires < ?", (horizon,))
 
     def record(
         self,
@@ -123,41 +100,6 @@ class Journal:
             {**dict(zip(keys, row[:8], strict=True)), "gmail_ids": json.loads(row[8]), "counts": json.loads(row[9])}
             for row in rows
         ]
-
-    def put_preview(self, preview: Preview) -> None:
-        with self._lock:
-            self._db.execute(
-                "INSERT INTO previews (id, operation, caller, created, expires, hash, payload, status)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    preview.id,
-                    preview.operation,
-                    preview.caller,
-                    self._wall(),
-                    preview.expires,
-                    preview.hash,
-                    json.dumps(preview.payload),
-                    preview.status,
-                ),
-            )
-
-    def get_preview(self, preview_id: str) -> Preview | None:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT id, operation, caller, expires, hash, payload, status FROM previews WHERE id = ?",
-                (preview_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return Preview(row[0], row[1], row[2], row[3], row[4], json.loads(row[5]), row[6])
-
-    def move_preview(self, preview_id: str, *, from_status: str, to_status: str) -> bool:
-        """Change a preview's status only if it still has `from_status`: one apply wins."""
-        with self._lock:
-            cursor = self._db.execute(
-                "UPDATE previews SET status = ? WHERE id = ? AND status = ?", (to_status, preview_id, from_status)
-            )
-            return cursor.rowcount == 1
 
     def close(self) -> None:
         with self._lock:

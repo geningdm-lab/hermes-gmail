@@ -14,7 +14,7 @@ from functools import partial
 from typing import Annotated, Any
 
 import anyio.to_thread
-from mcp.server.mcpserver import Elicit, ElicitationResult, MCPServer, Resolve
+from mcp.server.mcpserver import AcceptedElicitation, Context, Elicit, ElicitationResult, MCPServer, Resolve
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.request_state import RequestStateSecurity
 from mcp_types import ToolAnnotations
@@ -28,6 +28,16 @@ READ_ONLY = ToolAnnotations(read_only_hint=True)
 
 class Approval(BaseModel):
     """No fields: the owner answers yes or no to the preview's summary."""
+
+
+class NotAsked(BaseModel):
+    """The client cannot ask the owner. Never an approval: only `Approval` data is."""
+
+
+def owner_approved(answer: Any) -> bool:
+    """Only an answer the owner gave counts. The SDK wraps any value a resolver returns
+    itself as `AcceptedElicitation(data=value)`, so the data's type is checked too."""
+    return isinstance(answer, AcceptedElicitation) and isinstance(answer.data, Approval)
 
 
 INSTRUCTIONS = (
@@ -101,16 +111,21 @@ def build_server(client: GateClient) -> MCPServer:
     # Writes carry no read-only hint, so Hermes asks the owner before each call. An apply
     # also asks on its own, with the summary the gate stored at prepare time.
 
-    async def ask_owner(preview_id: str) -> Elicit[Approval]:
-        """The question shows the summary the gate stored at prepare time, not the agent's words."""
+    async def ask_owner(preview_id: str, ctx: Context) -> Elicit[Approval] | NotAsked:
+        """The question shows the summary the gate stored at prepare time, not the agent's words.
+        A client that cannot ask the owner gets `declined`, the same as a no."""
+        capabilities = ctx.client_capabilities
+        elicitation = capabilities.elicitation if capabilities is not None else None
+        if elicitation is None or (elicitation.form is None and elicitation.url is not None):
+            return NotAsked()
         preview = await call("preview", preview_id=preview_id)
         return Elicit(f"{preview['summary']} Approve this change?", Approval)
 
     Answer = Annotated[ElicitationResult[Approval], Resolve(ask_owner)]
 
     async def approved(op: str, preview_id: str, answer: Any) -> dict[str, Any]:
-        if answer.action != "accept":
-            raise ToolError("declined: the owner did not approve; nothing was written")
+        if not owner_approved(answer):
+            raise ToolError("declined: the owner did not approve, or could not be asked; nothing was written")
         return await call(op, preview_id=preview_id, approval="elicitation")
 
     @server.tool(description="Create a user label, or return the existing one with that name.")

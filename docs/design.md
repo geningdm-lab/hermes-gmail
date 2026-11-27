@@ -135,7 +135,7 @@ The standing authority for unattended classification is the classifier's own rul
 
 ### Interactive
 
-Label changes on messages and filters are two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and a 15-minute expiry. The owner approves that preview in the agent's chat (see Agent adapter). `apply(preview_id, approval)` takes the preview once (a second apply, even a concurrent one, is `refused`), re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview. A declined approval leaves the preview open; a stale or expired one cannot be applied.
+Label changes on messages and filters are two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and a 15-minute expiry. The owner approves that preview in the agent's chat (see Agent adapter). `apply(preview_id, approval)` takes the preview once (a second apply, even a concurrent one, is `refused`), re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview. A declined approval leaves the preview open; a stale or expired one cannot be applied. Previews live in the service's memory, because they hold label names, filter criteria and addresses that the journal must not record; a restart drops them, and the agent prepares again. A summary leads with the action and the targets; every name or value taken from the agent or the mailbox is shown in quotes, on one line, without control characters and cut at 80 characters, so it cannot pose as part of the action.
 
 `label_create` and `draft_put` are one step. A label is idempotent by name and authorizes nothing else; a draft is idempotent per thread and changes nothing anyone else sees until it is sent. Hermes' trust prompt is their approval.
 
@@ -149,11 +149,11 @@ Label changes on messages and filters are two steps. `prepare` returns an immuta
 
 Not offered: delete, trash, spam, sending without a draft, forwarding and other settings, attachment download.
 
-An apply without an accepted elicitation writes nothing. The adapter asks through the MCP SDK's elicitation resolver, which uses a mid-call request on the initialize-handshake protocol and an input-required round trip on protocol 2026-07-28; on the latter the answer rides the client's retry sealed with a per-process key, so a client cannot present an answer that was never given. Running as the same user as the agent, the service still cannot tell an elicitation the owner answered from one the agent answered itself. See Q1.
+An apply without an accepted elicitation writes nothing. The adapter asks through the MCP SDK's elicitation resolver, which uses a mid-call request on the initialize-handshake protocol and an input-required round trip on protocol 2026-07-28; on the latter the answer rides the client's retry sealed with a per-process key, so a client cannot present an answer that was never given. Only an accepted answer whose data is the approval form counts: the SDK reports any value a resolver returns itself as accepted, so a client without elicitation is answered with a placeholder that is never an approval, and the apply is `declined`. Running as the same user as the agent, the service still cannot tell an elicitation the owner answered from one the agent answered itself. See Q1.
 
 ## State
 
-The service keeps a state directory (path from config, not in Git): the journal (SQLite) and the vault cooldown timestamp. The journal records operation, caller, preview hash, approval outcome and time, status and Gmail IDs. It never records bodies, subjects, snippets, codes or tokens.
+The service keeps a state directory (path from config, not in Git): the journal (SQLite) and the vault cooldown timestamp. Previews are in memory only. The journal records operation, caller, preview hash, approval outcome and time, status and Gmail IDs. It never records bodies, subjects, snippets, codes or tokens.
 
 Consumers keep their own state. The classifier's checkpoint, withheld set and lock and the reader's cursors stay where they are; the service never holds a consumer checkpoint, and moving code never creates a fresh one.
 

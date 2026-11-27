@@ -31,7 +31,7 @@ An unreleased attempt at a shared client exists on Lumi branches (`feature/2-mai
 
 ## Decisions
 
-Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8). D9 is a proposal waiting for the owner.
+Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8-D9).
 
 | # | Decision |
 |---|---|
@@ -43,7 +43,7 @@ Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8). D9 is a proposal waitin
 | D6 | Drafts, send and filters are in scope: the owner uses them today. They go through this gate, not through Google's Gmail MCP server: one transport, one OAuth grant, one place the token lives (see Considered and rejected). |
 | D7 | The Lumi mail-worker branches are closed as superseded once the tests worth keeping are carried over. |
 | D8 | The agent reaches the gate through a local stdio MCP server, `hermes-gmail mcp`, gated by Hermes with `trust: untrusted`, not through the CLI. Every write asks the owner in the agent's chat (see Agent adapter). |
-| D9 | Proposed: the service is a standalone process, not a Hermes plugin. The agent side (the MCP adapter, its `trust: untrusted` declaration and a generic usage skill) ships from this repository as a Hermes portable plugin package. |
+| D9 | The service is a standalone process, not a Hermes plugin. The agent side (the MCP adapter, its `trust: untrusted` declaration and a generic usage skill) ships from this repository as a Hermes portable plugin package. |
 
 ## Architecture
 

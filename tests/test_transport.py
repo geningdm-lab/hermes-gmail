@@ -75,9 +75,11 @@ class Writes(GateTestCase):
             (Reply(500), Category.UNCERTAIN),
             (Reply(429), Category.GMAIL_QUOTA),
             (Reply(400), Category.GMAIL_FAILED),
+            # Accepted, but the answer cannot be read: the write may well have happened.
+            (Reply(200, b"<html>maintenance</html>"), Category.UNCERTAIN),
         ]
         for reply, expected in cases:
-            with self.subTest(reply.status):
+            with self.subTest(reply.status, body=reply.body):
                 self.google.seen.clear()
                 self.google.gmail = replies(reply)
                 self.assertEqual(self.write(self.gate()), expected)

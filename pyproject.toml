@@ -1,0 +1,26 @@
+[project]
+name = "hermes-gmail"
+version = "0.1.0"
+description = "A small Gmail gate for a Hermes agent host"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = [
+    "S603", # subprocess with a fixed argument list, never a shell
+    "E501", # the formatter owns line length; long fixed messages stay on one line
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108", "S310"]

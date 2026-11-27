@@ -64,11 +64,12 @@ One account is configured. A request for any other account is refused.
 - Reads the OAuth document with `op document get` into memory only. Item and vault names come from config. No token reaches disk, stdout, logs or a response.
 - One refresh at a time: concurrent callers that need a fresh token wait for the same refresh.
 - A failed vault read is retried a bounded number of times with backoff, then the broker enters a cooldown and answers `vault_unavailable` without touching the vault until the cooldown ends. The cooldown start is kept in the state directory (a timestamp, no secret), so a restart loop cannot turn into a vault-read storm.
+- When Google rejects the refresh token or the client (`oauth_invalid_grant`, `oauth_invalid_client`), the broker answers that category without calling Google or the vault for the cooldown length, then reads the document again: the owner may have reauthorized and updated it in 1Password. The hold is in memory only; a restart reads the vault once.
 - The token endpoint must be one of Google's two token URIs; redirects are refused.
 
 ### Transport
 
-Stdlib `urllib`, carried over from the classifier helper: fixed Gmail base URL (tests point it at a local server through config), no redirects, every response bounded by an operation deadline.
+Stdlib `urllib`, carried over from the classifier helper: fixed Gmail base URL, no redirects, every response bounded by an operation deadline. Config may move the Gmail base and the token endpoint only to a loopback URL; that is how tests reach the local stand-in.
 
 - Reads retry `429`, `5xx` and `403 rateLimitExceeded`/`userRateLimitExceeded` with exponential backoff and jitter, honour `Retry-After`, and stop at the operation deadline.
 - Writes are never retried blindly. A label change that times out or fails is followed by a fresh read of the targets. A write that is not idempotent (send, draft create, filter create) is recorded `uncertain` in the journal, and only an explicit reconcile resolves it.

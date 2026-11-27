@@ -1,6 +1,6 @@
 # Design: hermes-gmail
 
-Status: draft for owner review. Date: 2026-11-27.
+Status: draft for owner review. Date: 2026-11-27, updated 2026-11-28.
 
 ## Why
 
@@ -31,7 +31,7 @@ An unreleased attempt at a shared client exists on Lumi branches (`feature/2-mai
 
 ## Decisions
 
-Owner answers of 2026-11-27.
+Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8). D9 is a proposal waiting for the owner.
 
 | # | Decision |
 |---|---|
@@ -40,14 +40,22 @@ Owner answers of 2026-11-27.
 | D3 | One service process, one Unix socket. The service identifies the caller by the socket's peer credentials (`SO_PEERCRED`), never by a request field, and each caller has a fixed table of operations. |
 | D4 | First an operational facade: while the service and the agent run as the same user, this is not a security boundary. It becomes one when the service runs as its own user and the agent loses read access to the OAuth document. That is a separate homelab change and a separate decision. |
 | D5 | One read budget per account, as today: requests paced at least 0.13 s apart, at most 3 in flight, shared by every caller. |
-| D6 | Drafts, send and filters are in scope: the owner uses them today. |
+| D6 | Drafts, send and filters are in scope: the owner uses them today. They go through this gate, not through Google's Gmail MCP server: one transport, one OAuth grant, one place the token lives (see Considered and rejected). |
 | D7 | The Lumi mail-worker branches are closed as superseded once the tests worth keeping are carried over. |
+| D8 | The agent reaches the gate through a local stdio MCP server, `hermes-gmail mcp`, gated by Hermes with `trust: untrusted`, not through the CLI. Every write asks the owner in the agent's chat (see Agent adapter). |
+| D9 | Proposed: the service is a standalone process, not a Hermes plugin. The agent side (the MCP adapter, its `trust: untrusted` declaration and a generic usage skill) ships from this repository as a Hermes portable plugin package. |
 
 ## Architecture
 
 ### Process
 
-`hermes-gmail serve` is a long-lived process supervised by systemd (deployed by homelab, not by this repository). It holds one credential broker, one HTTP transport, one budget, one journal for write operations, and one socket listener. `hermes_gmail.client` is a thin JSON-over-socket client; `hermes-gmail <operation>` is a CLI over that client, which replaces direct `op document get` calls in the agent's skills.
+`hermes-gmail serve` is a long-lived process supervised by systemd (deployed by homelab, not by this repository). It holds one credential broker, one HTTP transport, one budget, one journal for write operations, and one socket listener. Around it:
+
+- `hermes_gmail.client`, a thin JSON-over-socket client for the cron consumers.
+- `hermes-gmail mcp`, the agent adapter (D8): a stdio MCP server that Hermes starts. It holds no credential and turns each tool call into one socket request.
+- `hermes-gmail <operation>`, a CLI over the client for reads and `health()`, for the owner and for diagnostics. It offers no writes, so the documented write path always passes the owner's approval.
+
+The service is not a Hermes plugin (D9). A plugin runs inside the Hermes process with the agent's user and trust (`hermes-agent@28ef6e4:website/docs/developer-guide/plugins/index.md:117-126`), which would put the credential in the agent's memory and rule out a separate user later (D4, Q2). The cron consumers also run without Hermes.
 
 One account is configured. A request for any other account is refused.
 
@@ -66,6 +74,17 @@ Stdlib `urllib`, carried over from the classifier helper: fixed Gmail base URL (
 - Writes are never retried blindly. A label change that times out or fails is followed by a fresh read of the targets. A write that is not idempotent (send, draft create, filter create) is recorded `uncertain` in the journal, and only an explicit reconcile resolves it.
 - One `401` triggers one refresh and one repeat of the request: Gmail did not act on a request it answered with `401`.
 
+### Agent adapter
+
+`hermes-gmail mcp` offers one MCP tool per operation in the agent's set. Hermes citations below are to `hermes-agent@28ef6e4`, read in source, not observed live.
+
+- Read tools and every `*_prepare` carry `readOnlyHint: true`: they do not change the mailbox. Every apply carries no hint. On a `trust: untrusted` server Hermes asks the owner before any tool without `readOnlyHint: true`, and shows the call's arguments (`tools/mcp_tool_handlers.py:190-306`). A missing or malformed hint counts as write-capable (`tools/mcp_tool_registration.py:52-89`).
+- That prompt can be answered "once", "for this session" or "always" per tool, and YOLO or `approvals.mode: off` skip it (`tools/mcp_tool_handlers.py:68-74`, `website/docs/user-guide/features/mcp.md:1022`). So each apply also asks on its own: before the socket request, the adapter sends an MCP form elicitation with the preview summary (targets, changes; for send, recipients and subject). Hermes offers only yes or no for an elicitation and remembers no answer (`tools/approval_prompt.py:296-310`, `tools/mcp_tool_sampling.py:351-372`, `tools/mcp_elicitation_form.py:319-328`). Whether YOLO also skips the elicitation is not verified.
+- Decline, cancel, a timeout or a client without elicitation leaves the preview unused and writes nothing; the result is `declined`. Hermes declines an elicitation where nobody can answer, such as cron (`tools/approval_context.py:229-233`), so the agent cannot make interactive writes unattended.
+- The service journals each apply with the elicitation outcome and time, in place of an approval reference. Under D4 this is still a facade: the agent's user can start the adapter and answer its elicitation itself, or call the socket directly. See Q1.
+- The adapter uses the official MCP Python SDK. Server-to-client elicitation is the part not worth writing by hand. The service and the cron client stay stdlib-only; how the adapter's environment gets the SDK is settled in slice 4.
+- Packaging (D9): the repository root is a Hermes portable plugin package with `plugin.json`, `mcp.json` (the stdio command) and `skills/`. The package declares `trust: untrusted` for its server itself (`website/docs/developer-guide/plugins/index.md:128-150`). A `config.yaml` server with the same name replaces the package's entry, trust included, so deployment must not declare one.
+
 ### Errors
 
 Every error a caller sees carries exactly one category from a closed set, readable without parsing a message, and never a provider response body or a secret.
@@ -81,6 +100,7 @@ Every error a caller sees carries exactly one category from a closed set, readab
 | `gmail_not_found` | message, thread, draft or filter does not exist | caller decides |
 | `gmail_failed` | any other Gmail HTTP or transport failure | investigate |
 | `refused` | the gate refused before any vault or provider call: unknown operation, caller not allowed, wrong account, bound exceeded, malformed request, stale preview | fix the caller |
+| `declined` | the owner declined or cancelled an apply's approval, nobody answered in time, or nobody can answer; nothing was written | ask again only on the owner's direction |
 | `uncertain` | a write may or may not have happened | reconcile before anything else |
 
 `health()` returns per-category counters, the time of the last success per operation class, cooldown state and budget use. No mail content.
@@ -110,7 +130,7 @@ The standing authority for unattended classification is the classifier's own rul
 
 ### Interactive
 
-Every interactive write is two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and an expiry. The owner approves that preview. `apply(preview_ref, approval_ref)` re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview.
+Every interactive write is two steps. `prepare` returns an immutable preview: exact targets, exact changes, the provider state it was computed from, a hash and an expiry. The owner approves that preview in the agent's chat (see Agent adapter). `apply(preview_ref)` re-reads the targets, stops with `refused` if anything differs from the preview, writes, and reads back. A changed scope needs a new preview.
 
 | Operation | Notes |
 |---|---|
@@ -122,11 +142,11 @@ Every interactive write is two steps. `prepare` returns an immutable preview: ex
 
 Not offered: delete, trash, spam, sending without a draft, forwarding and other settings, attachment download.
 
-Approval in this first version is procedural. The agent passes a reference to the owner's approving message, and the service records it in the journal and refuses an apply without one. Running as the same user as the agent, the service cannot tell a real reference from a forged one. See Q1.
+An apply without an accepted elicitation writes nothing. Running as the same user as the agent, the service cannot tell an elicitation the owner answered from one the agent answered itself. See Q1.
 
 ## State
 
-The service keeps a state directory (path from config, not in Git): the journal (SQLite) and the vault cooldown timestamp. The journal records operation, caller, preview hash, approval reference, status and Gmail IDs. It never records bodies, subjects, snippets, codes or tokens.
+The service keeps a state directory (path from config, not in Git): the journal (SQLite) and the vault cooldown timestamp. The journal records operation, caller, preview hash, approval outcome and time, status and Gmail IDs. It never records bodies, subjects, snippets, codes or tokens.
 
 Consumers keep their own state. The classifier's checkpoint, withheld set and lock and the reader's cursors stay where they are; the service never holds a consumer checkpoint, and moving code never creates a fresh one.
 
@@ -136,6 +156,7 @@ Offline only, with synthetic fixtures:
 
 - A local HTTP server stands in for Gmail and the OAuth token endpoint, so tests cross the real transport and a real socket, not a mocked method.
 - A fake `op` executable on `PATH` stands in for 1Password: it can succeed, throttle, fail or hang.
+- The adapter is tested over stdio with the MCP SDK's client against a real service on a temporary socket. The test client answers the elicitations: accept, decline, cancel, timeout, or no elicitation support.
 - Fixtures are written for these tests, never derived from real mail.
 - No test touches real Gmail, Google OAuth or 1Password.
 
@@ -152,11 +173,13 @@ Carried over: the 13 transport and apply tests of `gmail_io.py`, and the mail-wo
 | 5 | MIME: HTML-only, image-only, malformed base64, unknown charset, truncation; nothing remote is fetched | 2 |
 | 6 | Classify reproduces today's plans and outcomes on the carried-over cases; `UNREAD` never changes; a partial failure returns verified and mismatched IDs separately | 3 |
 | 7 | Unknown caller, operation outside the caller's set, wrong account, raw URL or endpoint: refused before any vault or provider call; the reader cannot change the mailbox by any request it can build | 4 |
-| 8 | Interactive apply stops on a stale or expired preview, changed labels or an owner action since the preview; every written target is read back | 5 |
-| 9 | Drafts: one draft per thread, threading headers set, semantic read-back | 5 |
-| 10 | Filters: more than one user label refused; read-back compares as sets | 5 |
-| 11 | Send: lost response, timeout after acceptance, restart with a send in flight, a repeated approval: never a second send; the journal shows `uncertain` until reconciled | 6 |
-| 12 | Live, after deploy and separately approved: one bounded read, then one approved reversible label batch with read-back. No test send | cutover |
+| 8 | Adapter: the tool list is the agent's operation set; every read and prepare tool is annotated `readOnlyHint: true`, every apply carries no hint; the package declares `trust: untrusted` for its server | 4 |
+| 9 | Interactive apply stops on a stale or expired preview, changed labels or an owner action since the preview; every written target is read back | 5 |
+| 10 | Apply approval: the elicitation shows the preview summary; decline, cancel, timeout or a client without elicitation ends in `declined` with nothing written and the preview unused | 5 |
+| 11 | Drafts: one draft per thread, threading headers set, semantic read-back | 5 |
+| 12 | Filters: more than one user label refused; read-back compares as sets | 5 |
+| 13 | Send: lost response, timeout after acceptance, restart with a send in flight, a repeated approval: never a second send; the journal shows `uncertain` until reconciled | 6 |
+| 14 | Live, after deploy and separately approved: one bounded read, then one reversible label batch approved by the owner in Telegram, with read-back. No test send | cutover |
 
 ## Slices
 
@@ -165,16 +188,16 @@ One slice per pull request, in order.
 1. Credential broker, transport, error categories, `health()`, and the synthetic Gmail/OAuth/vault harness. Rows 1-3.
 2. Read operations and MIME text. Rows 4-5.
 3. `classify_apply` with per-message outcome. Row 6.
-4. Service: socket, peer credentials, per-caller operation sets, client, CLI. Row 7.
-5. Interactive writes: labels, filters, batch changes, drafts. Rows 8-10.
-6. Send with journal and reconcile. Row 11.
+4. Service: socket, peer credentials, per-caller operation sets, client, CLI; the MCP adapter with read tools and the plugin package. Rows 7-8.
+5. Interactive writes as adapter tools with elicitation: labels, filters, batch changes, drafts. Rows 9-12.
+6. Send with journal and reconcile. Row 13.
 
 Outside this repository, each approved separately:
 
-- Homelab: systemd unit, user, socket and state directory permissions, config, rollback.
+- Homelab: systemd unit, user, socket and state directory permissions, config, rollback; install and enable the plugin package for the agent's profile, with no same-name `mcp_servers` entry in `config.yaml`.
 - Lumi: the classifier calls the service; a missing checkpoint fails closed instead of starting from an empty one (today `run_daily.py:20` starts empty, which would replay archiving since the baseline); verified IDs advance the checkpoint and mismatched ones are set aside like withheld ones.
 - Lumi: the proactive reader calls the service; its cursors stay as they are.
-- Lumi: the mailbox and OAuth skills use the CLI instead of reading the OAuth document.
+- Lumi: the mailbox and OAuth skills stop reading the OAuth document; the agent uses the adapter's tools, and the private mailbox rules stay in Lumi's skill.
 - Lumi: the watchdog job calls `health()` with a forced refresh instead of reading the vault.
 - Lumi: close the mail-worker PRs as superseded (D7).
 
@@ -184,12 +207,26 @@ Rollback restores the consumer's previous runtime binding, never an older checkp
 
 | # | Question | Default until answered |
 |---|---|---|
-| Q1 | How does send approval become something the agent cannot forge? One option: the owner presses a button in Telegram (hermes-telegram) and the gateway, under its own user, hands the approval to the service. Depends on D4 | procedural approval reference, recorded in the journal |
+| Q1 | How does approval become something the agent cannot forge? The owner answers in Telegram, but the adapter runs as the agent's user, so the agent can start it and answer its elicitation itself. A forge-proof approval needs the approving side to run as a user the agent cannot become, for example the gateway handing the owner's button press to the service. Depends on D4 | elicitation through the adapter, recorded in the journal |
 | Q2 | When does the service get its own user and the agent lose read access to the OAuth document? | not before all consumers are cut over |
 | Q3 | Who confirms the first live cutover and the rollback? | the owner, by explicit message, after the homelab PR |
 | Q4 | Journal retention | 90 days |
 | Q5 | Attachment reads (used for travel-history work): in or out? | out of the first version |
 | Q6 | Vault cooldown length after a failed bounded retry | 15 minutes |
+
+## Considered and rejected
+
+### Google's Gmail MCP server
+
+Google offers a remote Gmail MCP server (`gmailmcp.googleapis.com`), and Hermes can connect to it. It was considered as the agent's path for drafts, send and filters, next to this gate for the cron consumers. It was rejected on 2026-11-28 because it would add a second transport without removing the first:
+
+- It cannot serve the cron consumers. There is no `history`, which the reader's incremental sync needs, and no batch label change: `update_message_labels` takes one message ID per call. Search returns threads, at most 50 a page. So the gate is needed in any case.
+- It lacks operations the owner uses: there is no filter, draft or label delete.
+- It needs a second OAuth grant, from a client flagged for AI agents. Hermes would keep that grant's refresh token on disk under `HERMES_HOME/mcp-tokens/` with mode 0600 (`hermes-agent@28ef6e4:tools/mcp_oauth.py:392-408`), against the rule that the token lives only in 1Password and the service's memory.
+- Its main advantage, approval of writes in the owner's chat, comes from Hermes and not from Google. Hermes gives the same to this gate's adapter (D8).
+- Google documents no quotas for it, and its tool list is still changing.
+
+Sources: [Gmail MCP reference](https://developers.google.com/workspace/gmail/api/reference/mcp), [Configure the Gmail MCP server](https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server), [Configure the Google Workspace MCP servers](https://developers.google.com/workspace/guides/configure-mcp-servers), [update_message_labels](https://developers.google.com/workspace/gmail/api/reference/mcp/tools_list/update_message_labels).
 
 ## Out of scope
 

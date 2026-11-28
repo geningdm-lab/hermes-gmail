@@ -27,7 +27,7 @@ retention_days = 90                      # Q4
 
 [[callers]]
 name = "classifier"
-uid = 1000
+uid = 1000                               # or user = "name", resolved at start
 roles = ["read", "classify"]
 
 [[callers]]

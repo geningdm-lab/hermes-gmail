@@ -3,6 +3,7 @@
 Real names (account, vault item, paths) exist only in the deployment's config file.
 """
 
+import pwd
 import re
 import tomllib
 import urllib.parse
@@ -170,13 +171,11 @@ def _callers(raw: Any) -> tuple[CallerConfig, ...]:
     for entry in raw:
         if not isinstance(entry, dict):
             raise ConfigError("each [[callers]] entry must be a table")
-        _only_keys(entry, "callers.", {"name", "uid", "roles"})
+        _only_keys(entry, "callers.", {"name", "uid", "user", "roles"})
         name = _string(entry, "name", "callers.")
         if not _CALLER_NAME.fullmatch(name):
             raise ConfigError("callers.name must be 1-32 characters of a-z, 0-9, _ and -")
-        uid = entry.get("uid")
-        if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
-            raise ConfigError("callers.uid must be a user ID")
+        uid = _caller_uid(entry)
         roles = entry.get("roles")
         if not isinstance(roles, list) or not roles or not set(roles) <= set(ROLES):
             raise ConfigError(f"callers.roles must be a non-empty list of {', '.join(ROLES)}")
@@ -184,6 +183,23 @@ def _callers(raw: Any) -> tuple[CallerConfig, ...]:
     if len({c.name for c in callers}) != len(callers):
         raise ConfigError("callers names must be unique")
     return tuple(callers)
+
+
+def _caller_uid(entry: dict[str, Any]) -> int:
+    """A caller is given by user ID or by user name. A name is resolved once, at start:
+    a host that allocates IDs itself (NixOS system users) has no fixed number to write."""
+    if ("uid" in entry) == ("user" in entry):
+        raise ConfigError("each [[callers]] entry needs exactly one of uid and user")
+    if "user" in entry:
+        user = _string(entry, "user", "callers.")
+        try:
+            return pwd.getpwnam(user).pw_uid
+        except KeyError:
+            raise ConfigError("callers.user names no user on this host") from None
+    uid = entry["uid"]
+    if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
+        raise ConfigError("callers.uid must be a user ID")
+    return uid
 
 
 def _only_keys(table: dict[str, Any], prefix: str, allowed: set[str]) -> None:

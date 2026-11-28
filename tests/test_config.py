@@ -1,3 +1,5 @@
+import os
+import pwd
 import unittest
 from pathlib import Path
 
@@ -34,6 +36,19 @@ class ConfigTests(unittest.TestCase):
     def test_the_example_config_is_valid(self):
         config = load_config(Path(__file__).resolve().parent.parent / "docs" / "config.example.toml")
         self.assertEqual({c.name for c in config.callers}, {"classifier", "reader", "agent"})
+
+    def test_a_caller_can_be_named_by_user(self):
+        # NixOS allocates system user IDs itself, so the deployment knows the name only.
+        me = pwd.getpwuid(os.getuid()).pw_name
+        caller = {"name": "a", "user": me, "roles": ["read"]}
+        self.assertEqual(parse_config({**MINIMAL, "callers": [caller]}).callers[0].uid, os.getuid())
+        for bad in (
+            {"name": "a", "user": "no-such-user-here", "roles": ["read"]},
+            {"name": "a", "user": "root", "uid": 0, "roles": ["read"]},
+            {"name": "a", "roles": ["read"]},
+        ):
+            with self.subTest(bad), self.assertRaises(ConfigError):
+                parse_config({**MINIMAL, "callers": [bad]})
 
     def test_unknown_keys_and_bad_values_are_refused(self):
         for raw in (

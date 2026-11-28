@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hermes-gmail",
+  "version": "0.1.0",
+  "description": "Gmail through the hermes-gmail gate: bounded reads, and writes the owner approves in chat.",
+  "license": "MIT",
+  "repository": "https://github.com/geningdm-lab/hermes-gmail",
+  "keywords": ["gmail", "email"],
+  "extensions": {
+    "com.nousresearch.hermes": {
+      "servers": {
+        "gmail": { "trust": "untrusted" }
+      }
+    }
+  }
+}

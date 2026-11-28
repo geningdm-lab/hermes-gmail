@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: uv sync --locked --all-extras
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: uv run python -m unittest discover -s tests -t .
+
+  nix:
+    # The package from uv.lock, the unit tests against it, and the NixOS
+    # module on a VM (checks.x86_64-linux.module). The installer turns on KVM.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - run: nix flake check -L --no-update-lock-file

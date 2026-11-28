@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "gmail": {
+      "type": "stdio",
+      "command": "hermes-gmail",
+      "args": ["mcp"],
+      "env": {
+        "HERMES_GMAIL_SOCKET": "${HERMES_GMAIL_SOCKET}",
+        "HERMES_GMAIL_CALLER": "${HERMES_GMAIL_CALLER}"
+      }
+    }
+  }
+}

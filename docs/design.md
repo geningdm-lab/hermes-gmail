@@ -31,7 +31,7 @@ An unreleased attempt at a shared client exists on Lumi branches (`feature/2-mai
 
 ## Decisions
 
-Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8-D9).
+Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8-D10).
 
 | # | Decision |
 |---|---|
@@ -44,12 +44,13 @@ Owner answers of 2026-11-27 (D1-D7) and 2026-11-28 (D8-D9).
 | D7 | The Lumi mail-worker branches are closed as superseded once the tests worth keeping are carried over. |
 | D8 | The agent reaches the gate through a local stdio MCP server, `hermes-gmail mcp`, gated by Hermes with `trust: untrusted`, not through the CLI. Every write asks the owner in the agent's chat (see Agent adapter). |
 | D9 | The service is a standalone process, not a Hermes plugin. The agent side (the MCP adapter, its `trust: untrusted` declaration and a generic usage skill) ships from this repository as a Hermes portable plugin package. |
+| D10 | The service's Nix package and NixOS module live in this repository, because the package is built from `uv.lock` and must move with it. The host's infrastructure repository (homelab) imports the module at a pinned revision and holds the instance: account, vault item, callers, the token's environment file, the unfree allowance for `op`, and the plugin package in the agent's profile. |
 
 ## Architecture
 
 ### Process
 
-`hermes-gmail serve` is a long-lived process supervised by systemd (deployed by homelab, not by this repository). It holds one credential broker, one HTTP transport, one budget, one journal for write operations, and one socket listener. Around it:
+`hermes-gmail serve` is a long-lived process supervised by systemd: this repository's NixOS module defines the unit and homelab runs an instance of it (D10, see Deployment unit). It holds one credential broker, one HTTP transport, one budget, one journal for write operations, and one socket listener. Around it:
 
 - `hermes_gmail.client`, a thin JSON-over-socket client for the cron consumers.
 - `hermes-gmail mcp`, the agent adapter (D8): a stdio MCP server that Hermes starts. It holds no credential and turns each tool call into one socket request.
@@ -59,7 +60,7 @@ The service is not a Hermes plugin (D9). A plugin runs inside the Hermes process
 
 One account is configured. A request for any other account is refused.
 
-The socket speaks one JSON object per line each way: `{"op", "args", "caller", "account"}` in, `{"ok": true, "result"}` or `{"ok": false, "error": {"category", "detail"}}` out. Config lists the callers as `[[callers]]` entries of name, user ID and roles (`read`, `classify`, `interactive`). The peer's user ID comes from the kernel. While several callers run as one user (D4), a request names which of that user's entries it is; the name can only pick among them, never add to them, so this separation is operational, not a security boundary, until the callers get their own users. `docs/config.example.toml` shows every key.
+The socket speaks one JSON object per line each way: `{"op", "args", "caller", "account"}` in, `{"ok": true, "result"}` or `{"ok": false, "error": {"category", "detail"}}` out. Config lists the callers as `[[callers]]` entries of name, user (an ID, or a name resolved to one at start) and roles (`read`, `classify`, `interactive`). The peer's user ID comes from the kernel. While several callers run as one user (D4), a request names which of that user's entries it is; the name can only pick among them, never add to them, so this separation is operational, not a security boundary, until the callers get their own users. `docs/config.example.toml` shows every key.
 
 ### Credential broker
 
@@ -87,6 +88,16 @@ Stdlib `urllib`, carried over from the classifier helper: fixed Gmail base URL, 
 - The service journals each apply with the elicitation outcome and time, in place of an approval reference. Under D4 this is still a facade: the agent's user can start the adapter and answer its elicitation itself, or call the socket directly. See Q1.
 - The adapter uses the official MCP Python SDK. Server-to-client elicitation is the part not worth writing by hand. The service and the cron client stay stdlib-only; how the adapter's environment gets the SDK is settled in slice 4.
 - Packaging (D9): the repository root is a Hermes portable plugin package with `plugin.json`, `mcp.json` (the stdio command) and `skills/`. The package declares `trust: untrusted` for its server itself (`website/docs/developer-guide/plugins/index.md:128-150`). A `config.yaml` server with the same name replaces the package's entry, trust included, so deployment must not declare one.
+
+### Deployment unit
+
+`flake.nix` (D10) gives `packages.default`, `nixosModules.default` and `checks`.
+
+- The package is the `hermes-gmail` command alone. Its Python 3.14 environment is built by uv2nix from `uv.lock`, with the `mcp` extra: nixpkgs carries mcp 1.26 and the adapter needs 2.3. The service still imports the standard library only. The package exposes only `bin/hermes-gmail`, so the environment's own `python` never lands on a host `PATH`.
+- `services.hermes-gmail` runs `hermes-gmail serve` as a systemd service, with a config file generated from `settings` and `callers`. The state directory (`/var/lib/hermes-gmail`, 0700) and the socket (`/run/hermes-gmail/gate.sock`, 0660 in a 0750 directory) belong to the unit and cannot be moved. The socket's group is the service's group: a caller that runs as another user must be a member to reach it, and the peer's user ID then decides what it may do.
+- `OP_SERVICE_ACCOUNT_TOKEN` comes from `environmentFile`, which systemd reads before it drops privileges. It is never in the Nix store or the config file.
+- The user defaults to a dedicated `hermes-gmail`; under D4 the host sets the agent's user instead. Callers are named by user and resolved to an ID at start, because NixOS allocates system user IDs itself.
+- The unit is hardened: `ProtectSystem=strict`, no capabilities, a system-call filter, Unix and inet sockets only. It does not use `PrivateUsers`, which would map every caller to one ID, or `RemoveIPC`, which under D4 would remove the agent's IPC objects when the service stops.
 
 ### Errors
 
@@ -166,6 +177,7 @@ Offline only, with synthetic fixtures:
 - The adapter is tested over stdio with the MCP SDK's client against a real service on a temporary socket. The test client answers the elicitations: accept, decline, cancel, timeout, or no elicitation support.
 - Fixtures are written for these tests, never derived from real mail.
 - No test touches real Gmail, Google OAuth or 1Password.
+- The NixOS module boots on a VM (`nix flake check` on Linux) with the same kind of stand-ins for `op` and Google.
 
 Carried over: the 13 transport and apply tests of `gmail_io.py`, and the mail-worker tests that still apply (broker categories, bounds, MIME).
 
@@ -187,6 +199,7 @@ Carried over: the 13 transport and apply tests of `gmail_io.py`, and the mail-wo
 | 12 | Filters: more than one user label refused; read-back compares as sets | 5 |
 | 13 | Send: lost response, timeout after acceptance, restart with a send in flight, a repeated approval: never a second send; the journal shows `uncertain` until reconciled | 6 |
 | 14 | Live, after deploy and separately approved: one bounded read, then one reversible label batch approved by the owner in Telegram, with read-back. No test send | cutover |
+| 15 | The NixOS module on a VM: state directory, socket directory and socket permissions; the environment file reaches `op`; a caller is served; a group member that is not a caller is refused; a non-member cannot reach the socket; a restart serves again | 7 |
 
 ## Slices
 
@@ -198,10 +211,11 @@ One slice per pull request, in order.
 4. Service: socket, peer credentials, per-caller operation sets, client, CLI; the MCP adapter with read tools and the plugin package. Rows 7-8.
 5. Interactive writes as adapter tools with elicitation: labels, filters, batch changes, drafts. Rows 9-12.
 6. Send with journal and reconcile. Row 13.
+7. Nix package, NixOS module and its VM test (D10). Row 15.
 
 Outside this repository, each approved separately:
 
-- Homelab: systemd unit, user, socket and state directory permissions, config, rollback; install and enable the plugin package for the agent's profile, with no same-name `mcp_servers` entry in `config.yaml`.
+- Homelab: import `nixosModules.default` at a pinned revision and set the instance (account, vault item, callers, user under D4, the token's environment file through sops, the unfree allowance for `op`), rollback; install and enable the plugin package for the agent's profile, with no same-name `mcp_servers` entry in `config.yaml`.
 - Lumi: the classifier calls the service; a missing checkpoint fails closed instead of starting from an empty one (today `run_daily.py:20` starts empty, which would replay archiving since the baseline); the outcome lists drive the checkpoint as described in Classify.
 - Lumi: the proactive reader calls the service; its cursors stay as they are.
 - Lumi: the mailbox and OAuth skills stop reading the OAuth document; the agent uses the adapter's tools, and the private mailbox rules stay in Lumi's skill.
@@ -242,4 +256,4 @@ Sources: [Gmail MCP reference](https://developers.google.com/workspace/gmail/api
 - Delete, trash, spam, forwarding and settings other than filters.
 - A second account or family profiles.
 - OCR, PDF extraction, attachment execution.
-- Deployment, which belongs to homelab.
+- A host's deployment instance: its values, secrets and rollback belong to homelab (D10).

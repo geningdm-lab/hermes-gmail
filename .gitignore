@@ -13,3 +13,5 @@ state/
 *.sqlite
 *.sqlite-journal
 config.local.toml
+result
+result-*

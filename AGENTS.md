@@ -9,7 +9,8 @@ Read README.md and docs/design.md before changing anything. The design's decisio
 - Cite consumer code in the private Lumi repository as `lumi@<commit>:path:line` and Hermes as `hermes-agent@<commit>:path:line`. Cite Gmail and OAuth behaviour from developers.google.com with the page. A passing test is not live behaviour.
 - No secret reaches disk, stdout, logs, errors or responses. Errors carry a category from docs/design.md, never a provider response body.
 - Writes are never retried blindly. A write that is not idempotent is journaled before the call and becomes `uncertain` when its outcome is unknown.
-- Deployment (systemd unit, user, socket, config) belongs to homelab, not here.
+- The NixOS module (`nix/module.nix`) defines the unit: user, socket, state directory, hardening. A host's values (account, vault item, callers, secrets) belong to homelab, not here; the module test uses synthetic values only.
+- A change to `pyproject.toml` or `uv.lock` must still pass `nix flake check`: the package is built from `uv.lock`.
 - Owner review happens on GitHub pull requests. Never merge without the owner's approval.
 
 ## Per slice
